@@ -40,12 +40,12 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Optionally also push to HuggingFace Hub container registry
+      # Push to HuggingFace Spaces container registry (requires GitHub PAT with org access)
       - name: Push to HF Container Registry
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        if: env.HF_TOKEN != ''
+          GH_PAT: ${{ secrets.GH_PAT }}
+        if: env.GH_PAT != ''
         run: |
-          echo "$HF_TOKEN" | docker login ghcr.io -u hf --password-stdin
+          echo "$GH_PAT" | docker login ghcr.io -u DiscoStew6082 --password-stdin
           docker tag ghcr.io/${{ github.repository }}:latest ghcr.io/huggingface/spaces-org/baseball-rag:latest
           docker push ghcr.io/huggingface/spaces-org/baseball-rag:latest
