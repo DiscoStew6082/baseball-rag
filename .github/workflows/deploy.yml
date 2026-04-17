@@ -40,11 +40,3 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Push to HuggingFace Spaces (Docker) via container registry
-      - name: Push to HF Spaces Docker Registry
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: |
-          echo "$HF_TOKEN" | docker login ghcr.io -u DiscoStew6082 --password-stdin
-          docker tag ghcr.io/discostew6082/baseball-rag:latest ghcr.io/huggingface/spaces-org/discostew6082__baseball-rag:latest
-          docker push ghcr.io/huggingface/spaces-org/discostew6082__baseball-rag:latest
