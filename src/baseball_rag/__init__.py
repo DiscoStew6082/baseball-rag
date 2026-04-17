@@ -1,4 +1,5 @@
 """Baseball RAG application."""
+
 from baseball_rag.db import (
     DATA_DIR,
     get_career_stat_leaders,

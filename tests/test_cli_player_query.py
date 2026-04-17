@@ -3,6 +3,7 @@
 When a stat query is asked WITHOUT specifying a year (e.g., 'who leads MLB in HR'),
 the CLI should return leaders for the MOST RECENT available data, NOT career leaders.
 """
+
 from unittest.mock import patch
 
 # We'll test at the answer() function level since it contains the bug
@@ -30,8 +31,10 @@ class TestLatestYearLogic:
         """'HR leaders in 1999' → should call get_stat_leaders(HR, 1999)."""
         from baseball_rag.cli import answer
 
-        with patch("baseball_rag.cli.get_stat_leaders") as mock_yearly, \
-             patch("baseball_rag.db.init_db"):
+        with (
+            patch("baseball_rag.cli.get_stat_leaders") as mock_yearly,
+            patch("baseball_rag.db.init_db"),
+        ):
             mock_yearly.return_value = []
 
             answer("HR leaders in 1999")

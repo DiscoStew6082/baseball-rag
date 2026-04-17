@@ -1,4 +1,5 @@
 """Tests for 'this year' handling in query routing (Bug 1)."""
+
 import datetime
 
 from baseball_rag.routing.query_router import _extract_year

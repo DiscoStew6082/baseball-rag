@@ -1,4 +1,5 @@
 """Generation layer — LLM + prompts."""
+
 from baseball_rag.generation.answer import answer
 from baseball_rag.generation.llm import make_request, make_request_stream
 from baseball_rag.generation.prompt import (

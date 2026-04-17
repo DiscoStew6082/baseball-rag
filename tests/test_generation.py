@@ -1,4 +1,5 @@
 """Tests for generation.answer() — Phase 5.5."""
+
 from baseball_rag.generation import answer
 from baseball_rag.retrieval.chroma_store import RetrievedChunk
 
@@ -22,4 +23,3 @@ class TestGenerationAnswer:
         assert len(result) > 10
         # Result should mention the player from context (or fall back to showing doc text)
         assert "ruth" in result.lower() or "babe" in result.lower()
-

@@ -1,0 +1,28 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.15.0
+    hooks:
+      - id: mypy
+        additional_dependencies:
+          - types-PyYAML
+          - types-requests
+        args: [--namespace-packages]
+        name: mypy (baseball_rag)
+        exclude: "^src/mlb_api_mcp/"
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: "^src/mlb_api_mcp/"
+      - id: end-of-file-fixer
+        exclude: "^src/mlb_api_mcp/"
+      - id: check-yaml
+      - id: check-merge-conflict

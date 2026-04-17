@@ -1,4 +1,5 @@
 """Database layer — queries via DuckDB over HuggingFace CSV data."""
+
 from baseball_rag.db.duckdb_schema import DATA_DIR, init_db
 from baseball_rag.db.queries import (
     get_career_stat_leaders,

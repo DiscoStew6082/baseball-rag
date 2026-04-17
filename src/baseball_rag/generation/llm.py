@@ -1,4 +1,5 @@
 """LLM integration — calls local Gemma via LM Studio."""
+
 import os
 from dataclasses import dataclass
 from typing import Iterator
@@ -44,9 +45,7 @@ def make_request(
 
     payload = {
         "model": model,
-        "messages": [
-            {"role": "user", "content": prompt}
-        ],
+        "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
         "temperature": temperature,
         "stream": False,
@@ -84,9 +83,7 @@ def make_request_stream(
 
     payload = {
         "model": model,
-        "messages": [
-            {"role": "user", "content": prompt}
-        ],
+        "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
         "temperature": temperature,
         "stream": True,
@@ -96,15 +93,14 @@ def make_request_stream(
         resp = requests.post(f"{base_url}/chat/completions", json=payload, timeout=120, stream=True)
         resp.raise_for_status()
     except requests.ConnectionError as exc:
-        raise ConnectionError(
-            f"Could not connect to LM Studio at {base_url}."
-        ) from exc
+        raise ConnectionError(f"Could not connect to LM Studio at {base_url}.") from exc
 
     for line in resp.iter_lines(decode_unicode=True):
         if not line or line == "data: [DONE]":
             break
         if line.startswith("data: "):
             import json as _json
+
             chunk = _json.loads(line[6:])
             delta = chunk.get("choices", [{}])[0].get("delta", {})
             # Gemma 4 puts response in reasoning_content, not content

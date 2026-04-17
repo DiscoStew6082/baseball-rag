@@ -1,4 +1,5 @@
 """Query routing - classify user intent and extract structured arguments."""
+
 import datetime
 import re
 from dataclasses import dataclass
@@ -7,25 +8,49 @@ from dataclasses import dataclass
 @dataclass
 class RouteResult:
     """Parsed result from classifying a user query."""
-    intent: str           # "stat_query" | "general_explanation"
-    stat: str | None      # e.g., "RBI", "HR"
-    year: int | None      # e.g., 1962
+
+    intent: str  # "stat_query" | "general_explanation"
+    stat: str | None  # e.g., "RBI", "HR"
+    year: int | None  # e.g., 1962
     position: str | None  # e.g., "OF", "CF"
     player_name: str | None = None  # e.g., "Mike Trout"
-    raw_question: str = ""          # original question text
+    raw_question: str = ""  # original question text
 
 
 # Stat keywords that imply a stat query
 STAT_KEYWORDS = {
-    "rbi", "rbis",
-    "home run", "hr", "hrs",
-    "batting average", "avg", ".400", ".406",
-    " ERA ", "whip", "strikeout", "so", "k",
-    "win", "loss", "w-l", "wl",
-    "stolen base", "sb", "steal",
-    "double", "2b", "triple", "3b",
-    "putout", "po", "assist", "a",
-    "on-base", "ops", "slugging",
+    "rbi",
+    "rbis",
+    "home run",
+    "hr",
+    "hrs",
+    "batting average",
+    "avg",
+    ".400",
+    ".406",
+    " ERA ",
+    "whip",
+    "strikeout",
+    "so",
+    "k",
+    "win",
+    "loss",
+    "w-l",
+    "wl",
+    "stolen base",
+    "sb",
+    "steal",
+    "double",
+    "2b",
+    "triple",
+    "3b",
+    "putout",
+    "po",
+    "assist",
+    "a",
+    "on-base",
+    "ops",
+    "slugging",
 }
 
 # Compiled pattern for stat-query detection
@@ -55,17 +80,35 @@ def _extract_stat(text: str) -> str | None:
     """Map query keywords to canonical stat names."""
     t = text.lower()
     for kw, stat in [
-        ("rbis", "RBI"), ("rbi", "RBI"),
-        ("home run", "HR"), ("hrs", "HR"), ("hr", "HR"),
-        (".400", "AVG"), (".406", "AVG"), ("batting average", "AVG"), ("avg", "AVG"),
-        (" ERA ", "ERA"), ("era", "ERA"),
+        ("rbis", "RBI"),
+        ("rbi", "RBI"),
+        ("home run", "HR"),
+        ("hrs", "HR"),
+        ("hr", "HR"),
+        (".400", "AVG"),
+        (".406", "AVG"),
+        ("batting average", "AVG"),
+        ("avg", "AVG"),
+        (" ERA ", "ERA"),
+        ("era", "ERA"),
         ("whip", "WHIP"),
-        ("strikeout", "SO"), ("strike outs", "SO"), ("so ", "SO"), ("k", "SO"),
-        ("win", "W"), ("loss", "L"), ("w-l", "WL"),
-        ("stolen base", "SB"), ("sb", "SB"), ("steal", "SB"),
-        ("double", "2B"), ("2b", "2B"),
-        ("triple", "3B"), ("3b", "3B"),
-        ("putout", "PO"), ("po ", "PO"), ("catch", "PO"),
+        ("strikeout", "SO"),
+        ("strike outs", "SO"),
+        ("so ", "SO"),
+        ("k", "SO"),
+        ("win", "W"),
+        ("loss", "L"),
+        ("w-l", "WL"),
+        ("stolen base", "SB"),
+        ("sb", "SB"),
+        ("steal", "SB"),
+        ("double", "2B"),
+        ("2b", "2B"),
+        ("triple", "3B"),
+        ("3b", "3B"),
+        ("putout", "PO"),
+        ("po ", "PO"),
+        ("catch", "PO"),
     ]:
         if kw in t:
             return stat

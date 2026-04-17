@@ -39,4 +39,3 @@ jobs:
           tags: ghcr.io/discostew6082/baseball-rag:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
-

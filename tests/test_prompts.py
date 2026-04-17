@@ -1,4 +1,5 @@
 """Tests for prompt templates."""
+
 from baseball_rag.generation.prompt import (
     build_explanation_prompt,
     build_stat_query_prompt,

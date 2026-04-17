@@ -1,4 +1,5 @@
 """Prompt templates for RAG-grounded answer generation."""
+
 from dataclasses import dataclass
 
 
@@ -18,17 +19,12 @@ STAT_QUERY_TEMPLATE = PromptBundle(
         "For stat queries, your answer must:\n"
         "1. State the player name, team (if applicable), and stat value clearly\n"
         "2. Briefly explain how that stat is defined or why it matters\n"
-        '3. Cite each piece of information by referencing the source document title in brackets\n'
+        "3. Cite each piece of information by referencing the source document title in brackets\n"
         "If the context does not contain enough info to fully answer, say what you can.\n\n"
         "Example: Mickey Mantle led MLB with 123 RBI for the New York Yankees "
         "in 1962 [Source: RBI.md]. RBI stands for Runs Batted In..."
     ),
-    user=(
-        "Use the following documents to answer:\n\n"
-        "{context}\n\n"
-        "---\n\n"
-        "Question: {question}"
-    ),
+    user=("Use the following documents to answer:\n\n{context}\n\n---\n\nQuestion: {question}"),
 )
 
 
@@ -41,26 +37,17 @@ GENERAL_EXPLANATION_TEMPLATE = PromptBundle(
         "If you do not have enough information from the documents to fully "
         "answer, say so honestly."
     ),
-    user=(
-        "Use the following documents to answer:\n\n"
-        "{context}\n\n"
-        "---\n\n"
-        "Question: {question}"
-    ),
+    user=("Use the following documents to answer:\n\n{context}\n\n---\n\nQuestion: {question}"),
 )
 
 
 def build_stat_query_prompt(question: str, context_docs: list) -> str:
     """Render a stat query prompt with retrieved document context."""
-    ctx = "\n\n".join(
-        f"[Source: {d.title}]\n{d.text}" for d in context_docs
-    )
+    ctx = "\n\n".join(f"[Source: {d.title}]\n{d.text}" for d in context_docs)
     return STAT_QUERY_TEMPLATE.render().format(context=ctx, question=question)
 
 
 def build_explanation_prompt(question: str, context_docs: list) -> str:
     """Render a general explanation prompt with retrieved document context."""
-    ctx = "\n\n".join(
-        f"[Source: {d.title}]\n{d.text}" for d in context_docs
-    )
+    ctx = "\n\n".join(f"[Source: {d.title}]\n{d.text}" for d in context_docs)
     return GENERAL_EXPLANATION_TEMPLATE.render().format(context=ctx, question=question)

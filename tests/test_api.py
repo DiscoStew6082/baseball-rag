@@ -1,9 +1,11 @@
 """Tests for FastAPI server — Phases 7.1 and 7.2."""
+
 from fastapi.testclient import TestClient
 
 from baseball_rag.api.server import app
 
 client = TestClient(app)
+
 
 class TestApi:
     def test_health_endpoint(self):
@@ -23,4 +25,3 @@ class TestApi:
         assert isinstance(data["answer"], str)
         assert "sources" in data
         assert isinstance(data["sources"], list)
-

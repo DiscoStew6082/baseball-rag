@@ -1,4 +1,5 @@
 """Embedder client using LM Studio's embedding endpoint."""
+
 import os
 
 import requests
@@ -6,6 +7,7 @@ import requests
 DEFAULT_BASE_URL = "http://localhost:1234/v1"
 DEFAULT_MODEL = "google/gemma-4-26b-a4b"
 EMBEDDING_ENDPOINT = "/embeddings"
+
 
 def embed(
     text: str,

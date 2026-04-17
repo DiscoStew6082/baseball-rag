@@ -9,6 +9,7 @@ from baseball_rag.retrieval.chroma_store import get_store, retrieve
 def chroma_db_dir(tmp_path):
     """Build a fresh index in a temp dir."""
     from baseball_rag.corpus.ingest import build_index
+
     build_index(tmp_path / "chroma")
     return tmp_path / "chroma"
 

@@ -1,4 +1,5 @@
 """Public answer() API — Generation layer entry point."""
+
 from baseball_rag.generation.prompt import build_explanation_prompt
 from baseball_rag.retrieval.chroma_store import RetrievedChunk
 
@@ -8,6 +9,7 @@ def answer(question: str, chunks: list[RetrievedChunk]) -> str:
     prompt = build_explanation_prompt(question, chunks)
     try:
         from baseball_rag.generation.llm import make_request
+
         response = make_request(prompt)
         return response.content
     except ConnectionError:

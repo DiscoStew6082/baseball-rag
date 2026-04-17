@@ -1,4 +1,5 @@
 """DuckDB CSV schema setup — zero-ingestion queries over NeuML/baseballdata CSVs."""
+
 import csv
 import threading
 from pathlib import Path
@@ -22,7 +23,9 @@ try:
         for row in reader:
             team_id = row.get("teamID") or row.get("TeamCode") or row.get("ID")
             name = (
-                row.get("name") or row.get("Name") or row.get("teamName")
+                row.get("name")
+                or row.get("Name")
+                or row.get("teamName")
                 or f"{row.get('city', '')} {row.get('nickname', '')}".strip()
             )
             if team_id and name:

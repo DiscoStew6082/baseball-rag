@@ -1,4 +1,5 @@
 """Baseball RAG query engine — CLI entry point."""
+
 import sys
 
 from baseball_rag.db import get_career_stat_leaders, get_player_stat, get_stat_leaders, init_db
@@ -30,14 +31,13 @@ def answer(question: str) -> str:
         # If player name detected but no explicit year → get their latest-year stats
         if decision.player_name and not year:
             from baseball_rag.db.duckdb_schema import get_duckdb
+
             conn = get_duckdb()
             result = get_player_stat(conn, decision.player_name, stat)
-            conn.close()
             if result:
                 team_str = f" ({result['team']})" if result["team"] else ""
                 return (
-                    f"{result['name']}{team_str} "
-                    f"({result['year']}): {result['stat_value']} {stat}"
+                    f"{result['name']}{team_str} ({result['year']}): {result['stat_value']} {stat}"
                 )
 
         if year:
@@ -45,9 +45,9 @@ def answer(question: str) -> str:
             if not rows and decision.player_name:
                 # Requested year had no results for this player — show their latest
                 from baseball_rag.db.duckdb_schema import get_duckdb
+
                 conn = get_duckdb()
                 result = get_player_stat(conn, decision.player_name, stat)
-                conn.close()
                 if result:
                     team_str = f" ({result['team']})" if result["team"] else ""
                     return (

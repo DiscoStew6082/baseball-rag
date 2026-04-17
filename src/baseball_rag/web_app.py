@@ -1,4 +1,5 @@
 """Gradio web interface for Baseball RAG query engine."""
+
 import gradio as gr
 
 from baseball_rag.cli import answer

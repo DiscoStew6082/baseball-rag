@@ -1,4 +1,5 @@
 """End-to-end pipeline integration test — Phase 7.3."""
+
 from baseball_rag.cli import answer
 
 
@@ -15,4 +16,3 @@ class TestPipeline:
         result = answer("who was babe ruth")
         assert isinstance(result, str)
         assert len(result) > 0
-

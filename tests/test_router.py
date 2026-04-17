@@ -1,4 +1,5 @@
 """Tests for query routing."""
+
 from baseball_rag.routing import route
 
 

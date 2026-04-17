@@ -1,4 +1,5 @@
 """Persistent vector store backed by ChromaDB."""
+
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,9 +15,7 @@ class LMStudioEmbeddingFunction(chromadb.EmbeddingFunction[chromadb.Documents]):
     def __init__(self) -> None:
         pass  # uses module-level defaults / env vars
 
-    def __call__(
-        self, input: chromadb.Documents
-    ) -> list[np.ndarray]:
+    def __call__(self, input: chromadb.Documents) -> list[np.ndarray]:
         # ChromaDB protocol accepts str | list[str] | pre-computed embeddings.
         # We only support str | list[str]; the embedder returns vector floats.
         return [np.array(_embedder.embed(text)) for text in input]
@@ -36,6 +35,7 @@ class LMStudioEmbeddingFunction(chromadb.EmbeddingFunction[chromadb.Documents]):
 @dataclass
 class RetrievedChunk:
     """A single retrieved document chunk."""
+
     text: str
     source: str
     title: str
@@ -64,6 +64,7 @@ def retrieve(query: str, top_k: int = 3, persist_dir: Path | None = None) -> lis
     """
     if persist_dir is None:
         from baseball_rag.db.duckdb_schema import DATA_DIR
+
         persist_dir = DATA_DIR
 
     collection = get_store(persist_dir)
@@ -84,11 +85,13 @@ def retrieve(query: str, top_k: int = 3, persist_dir: Path | None = None) -> lis
         dist = results["distances"][0][i]  # type: ignore[index]
         # ChromaDB L2 distance — lower is better; convert to a 0-1 "score"
         score = max(0.0, 1.0 - dist / 2.0)
-        chunks.append(RetrievedChunk(
-            text=doc,
-            source=str(meta.get("source", "")),
-            title=str(meta.get("title", "")),
-            score=score,
-        ))
+        chunks.append(
+            RetrievedChunk(
+                text=doc,
+                source=str(meta.get("source", "")),
+                title=str(meta.get("title", "")),
+                score=score,
+            )
+        )
 
     return chunks

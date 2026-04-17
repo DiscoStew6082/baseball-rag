@@ -35,15 +35,17 @@ def build_index(persist_dir: Path) -> None:
     for path in [*get_stat_defs(), *get_hof_bios()]:
         result = parse_frontmatter(path.read_text())
         text = f"{result['metadata']['title']}\n\n{result['body'].strip()}"
-        docs_to_add.append({
-            "id": path.stem,
-            "text": text,
-            "metadata": {
-                "source": str(path.name),
-                "category": result["metadata"].get("category", ""),
-                "title": result["metadata"].get("title", ""),
-            },
-        })
+        docs_to_add.append(
+            {
+                "id": path.stem,
+                "text": text,
+                "metadata": {
+                    "source": str(path.name),
+                    "category": result["metadata"].get("category", ""),
+                    "title": result["metadata"].get("title", ""),
+                },
+            }
+        )
 
     texts = [d["text"] for d in docs_to_add]
     ids = [d["id"] for d in docs_to_add]

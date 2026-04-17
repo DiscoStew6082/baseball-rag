@@ -1,6 +1,5 @@
 """Tests for corpus content existence."""
 
-
 from baseball_rag.corpus import get_hof_bios, get_stat_defs
 
 

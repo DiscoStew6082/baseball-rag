@@ -1,4 +1,5 @@
 """Tests for LLM client — mocked since LM Studio may not be running."""
+
 from unittest.mock import MagicMock, patch
 
 import pytest

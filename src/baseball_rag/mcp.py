@@ -110,6 +110,7 @@ def _call_tool(tool_name: str, **kwargs: Any) -> dict:
 # Typed wrappers
 # ---------------------------------------------------------------------------
 
+
 def get_mlb_player_info(player_id: int) -> dict:
     """Get biographical info for a player by MLB API ID."""
     return _call_tool("get_mlb_player_info", player_id=player_id)

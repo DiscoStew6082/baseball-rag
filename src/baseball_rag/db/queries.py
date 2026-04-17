@@ -51,9 +51,7 @@ def get_stat_leaders(stat: str, year: int) -> list[dict]:
     conn = get_duckdb()
     result = conn.execute(query, [year]).fetchall()
 
-    return [
-        {"name": r[0], "team": _team_name(r[1]), "stat_value": r[2]} for r in result
-    ]
+    return [{"name": r[0], "team": _team_name(r[1]), "stat_value": r[2]} for r in result]
 
 
 def get_career_stat_leaders(stat: str, limit: int = 10) -> list[dict]:
@@ -189,14 +187,11 @@ def get_player_stat(conn: duckdb.DuckDBPyConnection, player_name: str, stat: str
     # DuckDB's strip_accents(LOWER(...)) normalizes accents, matching _normalize().
     if first:
         where_clause = (
-            "strip_accents(LOWER(p.nameFirst)) = ? AND "
-            "strip_accents(LOWER(p.nameLast)) = ?"
+            "strip_accents(LOWER(p.nameFirst)) = ? AND strip_accents(LOWER(p.nameLast)) = ?"
         )
         params: list = [norm_first, norm_last]
     else:
-        where_clause = (
-            "strip_accents(LOWER(p.nameLast)) = ?"
-        )
+        where_clause = "strip_accents(LOWER(p.nameLast)) = ?"
         params = [norm_last]
 
     query = f"""
