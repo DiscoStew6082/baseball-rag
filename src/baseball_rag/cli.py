@@ -34,8 +34,11 @@ def answer(question: str) -> str:
             result = get_player_stat(conn, decision.player_name, stat)
             conn.close()
             if result:
-                team_str = f" ({result['team']})" if result['team'] else ""
-                return f"{result['name']}{team_str} ({result['year']}): {result['stat_value']} {stat}"
+                team_str = f" ({result['team']})" if result["team"] else ""
+                return (
+                    f"{result['name']}{team_str} "
+                    f"({result['year']}): {result['stat_value']} {stat}"
+                )
 
         if year:
             rows = get_stat_leaders(stat, year)
@@ -46,8 +49,11 @@ def answer(question: str) -> str:
                 result = get_player_stat(conn, decision.player_name, stat)
                 conn.close()
                 if result:
-                    team_str = f" ({result['team']})" if result['team'] else ""
-                    return f"{result['name']}{team_str} ({result['year']}): {result['stat_value']} {stat}"
+                    team_str = f" ({result['team']})" if result["team"] else ""
+                    return (
+                        f"{result['name']}{team_str} "
+                        f"({result['year']}): {result['stat_value']} {stat}"
+                    )
             lines = [f"Top {stat} leaders for {year}:"]
             for i, row in enumerate(rows[:10], 1):
                 team_str = f" ({row['team']})" if row["team"] else ""

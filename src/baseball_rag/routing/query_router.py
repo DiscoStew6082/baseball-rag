@@ -36,7 +36,8 @@ def _extract_year(text: str) -> int | None:
     """Pull a year out of the query text."""
     t = text.lower()
     # Handle "this year", "current year", "this season", "current season"
-    if any(phrase in t for phrase in ("this year", "current year", "this season", "current season")):
+    year_phrases = ("this year", "current year", "this season", "current season")
+    if any(phrase in t for phrase in year_phrases):
         return datetime.datetime.now().year
     # Try 4-digit first
     m = re.search(r"\b(20\d{2}|19\d{2}|18\d{2})\b", text)

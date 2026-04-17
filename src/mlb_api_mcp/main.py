@@ -3,10 +3,9 @@ import os
 import warnings
 
 import uvicorn
-import fastmcp
 from fastmcp import FastMCP
-from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.middleware.cors import CORSMiddleware
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from generic_api import setup_generic_tools
 from mlb_api import setup_mlb_tools

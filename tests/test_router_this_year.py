@@ -22,5 +22,5 @@ class TestExtractYearThisYear:
     def test_this_year_in_question(self):
         """Query like 'who led MLB in RBI this year' should extract current year."""
         current_year = datetime.datetime.now().year
-        result = _extract_year(f"most RBIs this year")
+        result = _extract_year("most RBIs this year")
         assert result == current_year

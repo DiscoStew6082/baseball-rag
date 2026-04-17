@@ -218,4 +218,9 @@ def get_player_stat(conn: duckdb.DuckDBPyConnection, player_name: str, stat: str
     result = conn.execute(query, params).fetchone()
     if not result:
         return None
-    return {"name": result[0], "year": result[1], "team": _team_name(result[2]), "stat_value": result[3]}
+    return {
+        "name": result[0],
+        "year": result[1],
+        "team": _team_name(result[2]),
+        "stat_value": result[3],
+    }

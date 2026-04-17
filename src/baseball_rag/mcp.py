@@ -1,18 +1,16 @@
-"""MLB Stats API MCP client — manages the mlb-api-mcp subprocess and provides typed tool wrappers."""
+"""MLB Stats API MCP client — wraps the mlb-api-mcp subprocess with typed tools."""
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import signal
 import subprocess
 import threading
-import urllib.request
 import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
-
 
 _MCP_SERVER_PORT = 8001
 _MCP_BASE_URL = f"http://localhost:{_MCP_SERVER_PORT}"

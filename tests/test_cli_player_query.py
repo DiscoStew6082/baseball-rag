@@ -3,8 +3,7 @@
 When a stat query is asked WITHOUT specifying a year (e.g., 'who leads MLB in HR'),
 the CLI should return leaders for the MOST RECENT available data, NOT career leaders.
 """
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 # We'll test at the answer() function level since it contains the bug
 # The bug is: when no year is specified, cli.answer() calls get_career_stat_leaders()
