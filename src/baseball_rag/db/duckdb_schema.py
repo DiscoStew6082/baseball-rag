@@ -1,4 +1,4 @@
-"""Database initialization using DuckDB with CSV data."""
+"""DuckDB CSV schema setup — zero-ingestion queries over NeuML/baseballdata CSVs."""
 import duckdb
 
 from pathlib import Path

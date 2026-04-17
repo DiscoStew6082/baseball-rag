@@ -35,7 +35,7 @@ def retrieve(query: str, top_k: int = 3, persist_dir: Path | None = None) -> lis
         List of RetrievedChunk objects sorted by relevance (best first).
     """
     if persist_dir is None:
-        from baseball_rag.db.lahman import DATA_DIR
+        from baseball_rag.db.duckdb_schema import DATA_DIR
         persist_dir = DATA_DIR
 
     embed_fn = embedding_functions.DefaultEmbeddingFunction()

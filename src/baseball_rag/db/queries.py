@@ -1,6 +1,6 @@
 """SQL query helpers for baseball statistics."""
 
-from baseball_rag.db.lahman import get_duckdb, TEAM_MAP
+from baseball_rag.db.duckdb_schema import get_duckdb, TEAM_MAP
 
 
 def _team_name(teamID: str) -> str:
