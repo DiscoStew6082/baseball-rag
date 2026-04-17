@@ -1,7 +1,7 @@
 """DuckDB CSV schema setup — zero-ingestion queries over NeuML/baseballdata CSVs."""
-import duckdb
-
 from pathlib import Path
+
+import duckdb
 
 # Project root: go up 4 levels — lahman.py -> db/ -> baseball_rag/ -> src/ -> repo/
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -34,7 +34,7 @@ def get_duckdb() -> duckdb.DuckDBPyConnection:
 
     # Create a teams table from TEAM_MAP so queries can JOIN on it
     teams_rows = ", ".join(f"('{k}', '{v}')" for k, v in TEAM_MAP.items())
-    conn.execute(f"CREATE TABLE teams (teamID TEXT, name TEXT)")
+    conn.execute("CREATE TABLE teams (teamID TEXT, name TEXT)")
     if teams_rows:
         conn.execute(f"INSERT INTO teams VALUES {teams_rows}")
 

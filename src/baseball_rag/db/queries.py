@@ -1,11 +1,11 @@
 """SQL query helpers for baseball statistics."""
 
-from baseball_rag.db.duckdb_schema import get_duckdb, TEAM_MAP
+from baseball_rag.db.duckdb_schema import TEAM_MAP, get_duckdb
 
 
-def _team_name(teamID: str) -> str:
+def _team_name(team_id: str) -> str:
     """Map a team ID to its full name via TEAM_MAP."""
-    return TEAM_MAP.get(teamID, "Unknown")
+    return TEAM_MAP.get(team_id, "Unknown")
 
 
 def get_stat_leaders(stat: str, year: int) -> list[dict]:
