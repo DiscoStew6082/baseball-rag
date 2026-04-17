@@ -54,19 +54,13 @@ uv run mypy src/
 ### Tests
 
 ```bash
-uv run pytest tests/ --ignore=tests/test_db_download.py -v
-```
-
-To also run the download test (requires network):
-
-```bash
 uv run pytest tests/ -v
 ```
 
 ### Coverage Report
 
 ```bash
-uv run pytest tests/ --ignore=tests/test_db_download.py --cov=baseball_rag --cov-report=term-missing
+uv run pytest --cov=baseball_rag --cov-report=term-missing
 ```
 
 Coverage report is also generated as `coverage.xml` and `coverage.html` (see `.coverage` and `htmlcov/` after runs).

@@ -1,7 +1,7 @@
 """Baseball RAG query engine — CLI entry point."""
 import sys
 
-from baseball_rag.db import get_stat_leaders, init_db
+from baseball_rag.db import get_career_stat_leaders, get_player_stat, get_stat_leaders, init_db
 from baseball_rag.generation.prompt import build_explanation_prompt
 from baseball_rag.retrieval.chroma_store import retrieve
 from baseball_rag.routing import route
@@ -20,8 +20,6 @@ def answer(question: str) -> str:
     Returns:
         Answer string.
     """
-    from baseball_rag.db import get_career_stat_leaders
-
     init_db()
     decision = route(question)
 
@@ -29,8 +27,27 @@ def answer(question: str) -> str:
         stat = decision.stat or "HR"
         year = decision.year
 
+        # If player name detected but no explicit year → get their latest-year stats
+        if decision.player_name and not year:
+            from baseball_rag.db.duckdb_schema import get_duckdb
+            conn = get_duckdb()
+            result = get_player_stat(conn, decision.player_name, stat)
+            conn.close()
+            if result:
+                team_str = f" ({result['team']})" if result['team'] else ""
+                return f"{result['name']}{team_str} ({result['year']}): {result['stat_value']} {stat}"
+
         if year:
             rows = get_stat_leaders(stat, year)
+            if not rows and decision.player_name:
+                # Requested year had no results for this player — show their latest
+                from baseball_rag.db.duckdb_schema import get_duckdb
+                conn = get_duckdb()
+                result = get_player_stat(conn, decision.player_name, stat)
+                conn.close()
+                if result:
+                    team_str = f" ({result['team']})" if result['team'] else ""
+                    return f"{result['name']}{team_str} ({result['year']}): {result['stat_value']} {stat}"
             lines = [f"Top {stat} leaders for {year}:"]
             for i, row in enumerate(rows[:10], 1):
                 team_str = f" ({row['team']})" if row["team"] else ""

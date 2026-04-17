@@ -1,4 +1,5 @@
 """Query routing - classify user intent and extract structured arguments."""
+import datetime
 import re
 from dataclasses import dataclass
 
@@ -10,7 +11,8 @@ class RouteResult:
     stat: str | None      # e.g., "RBI", "HR"
     year: int | None      # e.g., 1962
     position: str | None  # e.g., "OF", "CF"
-    raw_question: str     # original question text
+    player_name: str | None = None  # e.g., "Mike Trout"
+    raw_question: str = ""          # original question text
 
 
 # Stat keywords that imply a stat query
@@ -32,6 +34,10 @@ _LEADER_RE = re.compile(r"\b(most|least|highest|lowest|lead|leader|top|bottom)\b
 
 def _extract_year(text: str) -> int | None:
     """Pull a year out of the query text."""
+    t = text.lower()
+    # Handle "this year", "current year", "this season", "current season"
+    if any(phrase in t for phrase in ("this year", "current year", "this season", "current season")):
+        return datetime.datetime.now().year
     # Try 4-digit first
     m = re.search(r"\b(20\d{2}|19\d{2}|18\d{2})\b", text)
     if m:
@@ -65,6 +71,18 @@ def _extract_stat(text: str) -> str | None:
     return None
 
 
+def _extract_player(text: str) -> str | None:
+    """Pull a player name out of the query text.
+
+    Looks for patterns like 'does Mike Trout have' or 'did Aaron Judge have'
+    where NAME is Title Case word(s).
+    """
+    m = re.search(r"(?:does|did|has|had|are)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)", text)
+    if m:
+        return m.group(1)
+    return None
+
+
 def route(question: str) -> RouteResult:
     """Classify a natural language question into intent + extracted arguments.
 
@@ -76,6 +94,7 @@ def route(question: str) -> RouteResult:
     """
     stat = _extract_stat(question)
     year = _extract_year(question)
+    player_name = _extract_player(question)
 
     # Outfield / position detection
     pos: str | None = None
@@ -89,5 +108,6 @@ def route(question: str) -> RouteResult:
         stat=stat,
         year=year,
         position=pos,
+        player_name=player_name,
         raw_question=question,
     )
