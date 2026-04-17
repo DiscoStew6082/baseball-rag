@@ -1,5 +1,7 @@
 """SQL query helpers for baseball statistics."""
 
+import duckdb
+
 from baseball_rag.db.duckdb_schema import TEAM_MAP, get_duckdb
 
 
@@ -131,3 +133,89 @@ def get_fielding_leaders(year: int, position: str) -> list[dict]:
     conn.close()
 
     return [{"player": r[0], "stat_value": r[1]} for r in result]
+
+
+def _normalize(s: str) -> str:
+    """ASCII-fold a string for fuzzy matching.
+
+    Uses NFD normalization so that composed accented characters like "ñ" (U+00F1)
+    decompose into base letter + combining mark, then unidecode strips the combining
+    mark — yielding the same result as DuckDB's strip_accents(LOWER(...)).
+
+    Example: "Acuña" → NFD → "Acun~a" (combining tilde) → unidecode → "acuna"
+             matching DB: strip_accents(LOWER('Acuña')) = 'acuna'
+    """
+    import re
+    import unicodedata
+
+    from unidecode import unidecode
+
+    return re.sub(r"[^a-z]", "", unidecode(unicodedata.normalize("NFD", s)).lower())
+
+
+def get_player_stat(conn: duckdb.DuckDBPyConnection, player_name: str, stat: str) -> dict | None:
+    """Get a single player's stat for their most recent season.
+
+    Args:
+        conn: Active DuckDB connection.
+        player_name: Full name e.g. "Ronald Acuna" or "Matt Olson".
+        stat: The statistic to fetch (HR, RBI, etc.).
+
+    Returns:
+        Dict with keys: name, year, team, stat_value, or None if not found.
+    """
+    col_map = {
+        "HR": "HR",
+        "RBI": "RBI",
+        "H": "H",
+        "AB": "AB",
+        "R": "R",
+        "2B": '"2B"',
+        "3B": '"3B"',
+        "SB": "SB",
+        "BB": "BB",
+        "SO": "SO",
+    }
+    col = col_map.get(stat, stat)
+
+    # Split player name into first/last
+    parts = player_name.strip().split()
+    if len(parts) >= 2:
+        first, last = parts[0], parts[-1]
+    else:
+        last = parts[0]
+        first = None
+    norm_first = _normalize(first) if first else None
+    norm_last = _normalize(last)
+
+    # Both Python and DB use ASCII-folded last names for comparison.
+    # DuckDB's strip_accents(LOWER(...)) normalizes accents, matching _normalize().
+    if first:
+        where_clause = (
+            "strip_accents(LOWER(p.nameFirst)) = ? AND "
+            "strip_accents(LOWER(p.nameLast)) = ?"
+        )
+        params: list = [norm_first, norm_last]
+    else:
+        where_clause = (
+            "strip_accents(LOWER(p.nameLast)) = ?"
+        )
+        params = [norm_last]
+
+    query = f"""
+    SELECT
+        p.nameLast || ', ' || p.nameFirst AS name,
+        b.yearID,
+        b.teamID,
+        b.{col} AS stat_value
+    FROM batting b
+    JOIN people p ON b.playerID = p.playerID
+    WHERE {where_clause}
+      AND b.{col} IS NOT NULL
+    ORDER BY b.yearID DESC
+    LIMIT 1
+    """
+    result = conn.execute(query, params).fetchone()
+    if not result:
+        return None
+    return {"name": result[0], "year": result[1], "team": _team_name(result[2]), "stat_value": result[3]}
