@@ -26,7 +26,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install mypy types-requests types-PyYAML
-      - run: mypy src/
+      - run: mypy src/baseball_rag/
 
   test:
     runs-on: ubuntu-latest
