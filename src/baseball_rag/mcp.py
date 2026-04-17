@@ -12,7 +12,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-_MCP_SERVER_PORT = 8001
+_MCP_SERVER_PORT = int(os.environ.get("MCP_PORT", 8001))
 _MCP_BASE_URL = f"http://localhost:{_MCP_SERVER_PORT}"
 _MCP_ENDPOINT = f"{_MCP_BASE_URL}/mcp"
 _PROCESS: subprocess.Popen | None = None

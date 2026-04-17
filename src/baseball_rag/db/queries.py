@@ -50,7 +50,6 @@ def get_stat_leaders(stat: str, year: int) -> list[dict]:
 
     conn = get_duckdb()
     result = conn.execute(query, [year]).fetchall()
-    conn.close()
 
     return [
         {"name": r[0], "team": _team_name(r[1]), "stat_value": r[2]} for r in result
@@ -93,7 +92,6 @@ def get_career_stat_leaders(stat: str, limit: int = 10) -> list[dict]:
 
     conn = get_duckdb()
     result = conn.execute(query, [limit]).fetchall()
-    conn.close()
 
     return [{"name": r[0], "team": "Career", "stat_value": r[1]} for r in result]
 
@@ -130,7 +128,6 @@ def get_fielding_leaders(year: int, position: str) -> list[dict]:
 
     conn = get_duckdb()
     result = conn.execute(query, params).fetchall()
-    conn.close()
 
     return [{"player": r[0], "stat_value": r[1]} for r in result]
 

@@ -3,9 +3,34 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import chromadb
-from chromadb.utils import embedding_functions
+import numpy as np
+
+from baseball_rag import embedder as _embedder
 
 COLLECTION_NAME = "baseball_corpus"
+
+
+class LMStudioEmbeddingFunction(chromadb.EmbeddingFunction[chromadb.Documents]):
+    def __init__(self) -> None:
+        pass  # uses module-level defaults / env vars
+
+    def __call__(
+        self, input: chromadb.Documents
+    ) -> list[np.ndarray]:
+        # ChromaDB protocol accepts str | list[str] | pre-computed embeddings.
+        # We only support str | list[str]; the embedder returns vector floats.
+        return [np.array(_embedder.embed(text)) for text in input]
+
+    @staticmethod
+    def name() -> str:
+        return "lmstudio"
+
+    @staticmethod
+    def build_from_config(config: dict) -> "LMStudioEmbeddingFunction":
+        return LMStudioEmbeddingFunction()
+
+    def get_config(self) -> dict[str, object]:
+        return {}
 
 
 @dataclass
@@ -20,7 +45,10 @@ class RetrievedChunk:
 def get_store(persist_dir: Path) -> chromadb.Collection:
     """Open or create the baseball corpus collection."""
     client = chromadb.PersistentClient(path=str(persist_dir))
-    return client.get_collection(COLLECTION_NAME)
+    return client.get_or_create_collection(
+        name=COLLECTION_NAME,
+        embedding_function=LMStudioEmbeddingFunction(),  # type: ignore[arg-type]
+    )
 
 
 def retrieve(query: str, top_k: int = 3, persist_dir: Path | None = None) -> list[RetrievedChunk]:
@@ -38,12 +66,10 @@ def retrieve(query: str, top_k: int = 3, persist_dir: Path | None = None) -> lis
         from baseball_rag.db.duckdb_schema import DATA_DIR
         persist_dir = DATA_DIR
 
-    embed_fn = embedding_functions.DefaultEmbeddingFunction()
     collection = get_store(persist_dir)
-    query_embedding = embed_fn([query])
 
     results = collection.query(
-        query_embeddings=query_embedding,
+        query_texts=[query],
         n_results=top_k,
         include=["documents", "metadatas", "distances"],
     )

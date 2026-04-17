@@ -6,6 +6,7 @@ import chromadb
 
 from baseball_rag.corpus import get_hof_bios, get_stat_defs
 from baseball_rag.corpus.frontmatter import parse_frontmatter
+from baseball_rag.retrieval.chroma_store import LMStudioEmbeddingFunction
 
 
 def build_index(persist_dir: Path) -> None:
@@ -26,6 +27,7 @@ def build_index(persist_dir: Path) -> None:
 
     collection = client.create_collection(
         name="baseball_corpus",
+        embedding_function=LMStudioEmbeddingFunction(),  # type: ignore[arg-type]
         metadata={"description": "Baseball stat definitions and Hall of Fame biographies"},
     )
 
