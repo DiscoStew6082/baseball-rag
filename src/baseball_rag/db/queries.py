@@ -1,9 +1,11 @@
 """SQL query helpers for baseball statistics."""
 
+from baseball_rag.db.lahman import get_duckdb, TEAM_MAP
 
-import duckdb
 
-from baseball_rag.db.lahman import DATA_DIR, init_db
+def _team_name(teamID: str) -> str:
+    """Map a team ID to its full name via TEAM_MAP."""
+    return TEAM_MAP.get(teamID, "Unknown")
 
 
 def get_stat_leaders(stat: str, year: int) -> list[dict]:
@@ -16,35 +18,41 @@ def get_stat_leaders(stat: str, year: int) -> list[dict]:
     Returns:
         List of dicts with keys: name, team, stat_value
     """
-    init_db()
-
-    # Map user-facing stat names to DB column names
+    # Map user-facing stat names to DB column names (quote 2B/3B)
     col_map = {
-        "HR": "HR", "RBI": "RBI", "H": "H", "AB": "AB",
-        "R": "R", "2B": '\"2B"', "3B": '\"3B"',
-        "SB": "SB", "BB": "BB", "SO": "SO",
+        "HR": "HR",
+        "RBI": "RBI",
+        "H": "H",
+        "AB": "AB",
+        "R": "R",
+        "2B": '"2B"',
+        "3B": '"3B"',
+        "SB": "SB",
+        "BB": "BB",
+        "SO": "SO",
     }
     col = col_map.get(stat, stat)
 
     query = f"""
     SELECT
         p.nameLast || ', ' || p.nameFirst AS name,
-        t.name AS team,
+        b.teamID,
         b.{col} AS stat_value
     FROM batting b
     JOIN people p ON b.playerID = p.playerID
-    LEFT JOIN teams t ON b.teamID = t.teamID
     WHERE b.yearID = ?
       AND b.{col} IS NOT NULL
     ORDER BY b.{col} DESC
     LIMIT 10
     """
 
-    conn = duckdb.connect(str(DATA_DIR / "lahman.sqlite"), read_only=True)
+    conn = get_duckdb()
     result = conn.execute(query, [year]).fetchall()
     conn.close()
 
-    return [{"name": r[0], "team": r[1], "stat_value": r[2]} for r in result]
+    return [
+        {"name": r[0], "team": _team_name(r[1]), "stat_value": r[2]} for r in result
+    ]
 
 
 def get_career_stat_leaders(stat: str, limit: int = 10) -> list[dict]:
@@ -57,18 +65,20 @@ def get_career_stat_leaders(stat: str, limit: int = 10) -> list[dict]:
     Returns:
         List of dicts with keys: name, team, stat_value
     """
-    init_db()
-
     col_map = {
-        "HR": "HR", "RBI": "RBI", "H": "H", "AB": "AB",
-        "R": "R", "2B": '\"2B"', "3B": '\"3B"',
+        "HR": "HR",
+        "RBI": "RBI",
+        "H": "H",
+        "AB": "AB",
+        "R": "R",
+        "2B": '"2B"',
+        "3B": '"3B"',
     }
     col = col_map.get(stat, stat)
 
     query = f"""
     SELECT
         p.nameLast || ', ' || p.nameFirst AS name,
-        'Career' AS team,
         SUM(b.{col}) AS stat_value
     FROM batting b
     JOIN people p ON b.playerID = p.playerID
@@ -79,11 +89,11 @@ def get_career_stat_leaders(stat: str, limit: int = 10) -> list[dict]:
     LIMIT ?
     """
 
-    conn = duckdb.connect(str(DATA_DIR / "lahman.sqlite"), read_only=True)
+    conn = get_duckdb()
     result = conn.execute(query, [limit]).fetchall()
     conn.close()
 
-    return [{"name": r[0], "team": r[1], "stat_value": r[2]} for r in result]
+    return [{"name": r[0], "team": "Career", "stat_value": r[1]} for r in result]
 
 
 def get_fielding_leaders(year: int, position: str) -> list[dict]:
@@ -96,8 +106,6 @@ def get_fielding_leaders(year: int, position: str) -> list[dict]:
     Returns:
         List of dicts with keys: player (name), stat_value (putouts)
     """
-    init_db()
-
     if position.upper() == "OF":
         pos_clause = "AND f.POS IN ('LF', 'CF', 'RF')"
         params: list = [year]
@@ -118,7 +126,7 @@ def get_fielding_leaders(year: int, position: str) -> list[dict]:
     LIMIT 20
     """
 
-    conn = duckdb.connect(str(DATA_DIR / "lahman.sqlite"), read_only=True)
+    conn = get_duckdb()
     result = conn.execute(query, params).fetchall()
     conn.close()
 

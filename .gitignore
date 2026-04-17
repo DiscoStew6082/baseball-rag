@@ -1,0 +1,25 @@
+# Bytecode
+__pycache__/
+*.py[cod]
+*.so
+
+# macOS
+.DS_Store
+
+# Test / coverage
+.coverage
+coverage.xml
+.pytest_cache/
+
+# Data — downloaded from HuggingFace at runtime, not stored in repo
+data/*.csv
+data/chroma.sqlite3
+data/c1cd15f1-*/  # Chroma vector data
+
+# Environments
+.venv/
+.env
+
+# IDE
+.vscode/
+.idea/
