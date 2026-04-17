@@ -37,6 +37,6 @@ jobs:
       - run: uv sync --dev
       # Explicitly install test deps into project venv (uv sync skips them when found in system Python)
       - run: uv pip install --python .venv/bin/python pytest pytest-cov coverage
-      # Run tests with coverage reporting
-      - run: uv run pytest --cov=baseball_rag --cov-report=xml --cov-fail-under=70
+      # Run tests with coverage reporting via venv python (bypasses uv run PATH resolution)
+      - run: .venv/bin/python -m pytest --cov=baseball_rag --cov-report=xml --cov-fail-under=70
       - uses: codecov/codecov-action@v4
