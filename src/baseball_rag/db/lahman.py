@@ -3,8 +3,8 @@ import duckdb
 
 from pathlib import Path
 
-# Project root is src/baseball_rag/db/../../ -> project root
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+# Project root: go up 4 levels — lahman.py -> db/ -> baseball_rag/ -> src/ -> repo/
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DATA_DIR = PROJECT_ROOT / "data"
 
 # Static team ID → name map (covers seed data + common teams)

@@ -36,6 +36,7 @@ jobs:
       # Install all dependencies (prod + dev) directly via pip — avoids uv venv PATH issues
       - run: pip install pytest pytest-cov coverage requests duckdb chromadb typer fastapi gradio httpx mypy types-requests types-PyYAML ruff
       - run: pip install -e .
-      # Run tests with coverage reporting
+      # Download NeuML/baseballdata CSVs (runtime deps — not stored in repo)
+      - run: python -c "from baseball_rag.db.download import download_all; download_all()"
       - run: python -m pytest --cov=baseball_rag --cov-report=xml --cov-fail-under=70
       - uses: codecov/codecov-action@v4

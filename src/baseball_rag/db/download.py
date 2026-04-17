@@ -6,7 +6,8 @@ import requests
 
 DATA_FILES = ["Batting.csv", "Fielding.csv", "People.csv", "Pitching.csv"]
 BASE_URL = "https://huggingface.co/datasets/NeuML/baseballdata/resolve/main"
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+# Project root: go up 4 levels — download.py -> db/ -> baseball_rag/ -> src/ -> repo/
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DATA_DIR = PROJECT_ROOT / "data"
 
 
