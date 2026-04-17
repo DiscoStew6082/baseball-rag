@@ -40,14 +40,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Push to HuggingFace Spaces using hf CLI
-      - name: Push to HF Spaces
+      # Push to HuggingFace Spaces (Docker) via container registry
+      - name: Push to HF Spaces Docker Registry
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          pip install huggingface_hub
-          hf spaces push \
-            --repo_id DiscoStew6082/baseball-rag \
-            --runtime docker \
-            --app_file space-app/Dockerfile \
-            --title "Baseball RAG Query Engine"
+          echo "$HF_TOKEN" | docker login ghcr.io -u DiscoStew6082 --password-stdin
+          docker tag ghcr.io/discostew6082/baseball-rag:latest ghcr.io/huggingface/spaces-org/discostew6082__baseball-rag:latest
+          docker push ghcr.io/huggingface/spaces-org/discostew6082__baseball-rag:latest
