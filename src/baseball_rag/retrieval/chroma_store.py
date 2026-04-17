@@ -49,16 +49,19 @@ def retrieve(query: str, top_k: int = 3, persist_dir: Path | None = None) -> lis
     )
 
     chunks = []
+    if not results["ids"]:
+        return []
+    # ChromaDB type stubs over-approximate None; we already verified ids is non-empty above
     for i in range(len(results["ids"][0])):
-        doc = results["documents"][0][i]
-        meta = results["metadatas"][0][i]
-        dist = results["distances"][0][i]
+        doc = results["documents"][0][i]  # type: ignore[index]
+        meta = results["metadatas"][0][i]  # type: ignore[index]
+        dist = results["distances"][0][i]  # type: ignore[index]
         # ChromaDB L2 distance — lower is better; convert to a 0-1 "score"
         score = max(0.0, 1.0 - dist / 2.0)
         chunks.append(RetrievedChunk(
             text=doc,
-            source=meta.get("source", ""),
-            title=meta.get("title", ""),
+            source=str(meta.get("source", "")),
+            title=str(meta.get("title", "")),
             score=score,
         ))
 

@@ -2,7 +2,6 @@
 import subprocess
 from pathlib import Path
 
-import pytest
 
 class TestDocker:
     def test_docker_builds(self):
@@ -17,11 +16,13 @@ class TestDocker:
         if result.returncode != 0:
             print("STDOUT:", result.stdout[-2000:])
             print("STDERR:", result.stderr[-2000:])
-        assert result.returncode == 0, f"Docker build failed"
+        assert result.returncode == 0, "Docker build failed"
 
     def test_container_health(self):
         """Container starts and /health endpoint responds on port 8001."""
-        import time, requests as _requests
+        import time
+
+        import requests as _requests
         proc = subprocess.Popen(
             ["docker", "run", "--rm", "-p", "8001:8000", "baseball-rag"],
             stdout=subprocess.PIPE,
@@ -34,3 +35,4 @@ class TestDocker:
         finally:
             proc.terminate()
             proc.wait(timeout=10)
+

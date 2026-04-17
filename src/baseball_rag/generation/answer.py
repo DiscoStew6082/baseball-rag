@@ -2,6 +2,7 @@
 from baseball_rag.generation.prompt import build_explanation_prompt
 from baseball_rag.retrieval.chroma_store import RetrievedChunk
 
+
 def answer(question: str, chunks: list[RetrievedChunk]) -> str:
     """Generate an answer to a question given retrieved context chunks."""
     prompt = build_explanation_prompt(question, chunks)

@@ -47,5 +47,5 @@ def build_index(persist_dir: Path) -> None:
     ids = [d["id"] for d in docs_to_add]
     metas = [d["metadata"] for d in docs_to_add]
 
-    collection.add(documents=texts, ids=ids, metadatas=metas)
+    collection.add(documents=texts, ids=ids, metadatas=metas)  # type: ignore[arg-type]
     print(f"Indexed {len(docs_to_add)} documents into baseball_corpus at {persist_dir}")

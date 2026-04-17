@@ -20,3 +20,4 @@ def query(req: QueryRequest):
     from baseball_rag.cli import answer as cli_answer
     result = cli_answer(req.question)
     return QueryResponse(answer=result, sources=[])
+

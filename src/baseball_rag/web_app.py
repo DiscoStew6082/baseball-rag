@@ -16,7 +16,8 @@ demo = gr.ChatInterface(
     description=(
         "Ask about MLB history in natural language. "
         "Stat queries (e.g. *'most RBIs in 1962'*) run SQL directly against a seed database. "
-        "General questions (*'who was Babe Ruth?'*) use retrieval-augmented generation with Gemma 4."
+        "General questions (*'who was Babe Ruth?'*) use "
+        "retrieval-augmented generation with Gemma 4."
     ),
     examples=[
         ["who had the most RBIs in 1962"],

@@ -1,6 +1,6 @@
 """Embedder client using LM Studio's embedding endpoint."""
 import os
-from typing import Annotated
+
 import requests
 
 DEFAULT_BASE_URL = "http://localhost:1234/v1"

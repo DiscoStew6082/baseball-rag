@@ -1,6 +1,7 @@
 """End-to-end pipeline integration test — Phase 7.3."""
 from baseball_rag.cli import answer
 
+
 class TestPipeline:
     def test_full_query_pipeline_stat(self):
         """Query 'who had most RBIs in 1962' returns string mentioning RBI or Mantle."""
@@ -14,3 +15,4 @@ class TestPipeline:
         result = answer("who was babe ruth")
         assert isinstance(result, str)
         assert len(result) > 0
+

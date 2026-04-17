@@ -1,6 +1,6 @@
 """Tests for embedder client — Phase 3.4."""
-import pytest
 from baseball_rag import embedder
+
 
 class TestEmbedder:
     def test_embed_returns_list_of_floats(self):
@@ -15,3 +15,4 @@ class TestEmbedder:
         a = embedder.embed("test string")
         b = embedder.embed("test string")
         assert a == b
+
