@@ -11,9 +11,6 @@ RUN uv sync --frozen --no-install-project
 
 # Copy source + corpus + data dirs
 COPY src/ ./src/
-COPY corpus/ ./corpus/
-COPY data/ ./data/
-
 ENV PYTHONPATH=/app/src
 
 EXPOSE 8000 7860
