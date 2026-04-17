@@ -1,5 +1,7 @@
 # Baseball RAG Query Engine
 
+[![CI](https://github.com/DiscoStew6082/baseball-rag/actions/workflows/ci.yml/badge.svg)](https://github.com/DiscoStew6082/baseball-rag/actions/workflows/ci.yml)
+
 A retrieval-augmented generation (RAG) system for MLB history, powered by a local LLM.
 
 ## What It Does
