@@ -35,6 +35,8 @@ jobs:
           python-version: '3.11'
       - run: pip install uv
       - run: uv sync --dev
+      # Explicitly install test deps into venv (uv sync skips them when found in system Python)
+      - run: pip install pytest pytest-cov coverage
       # Run tests with coverage reporting
       - run: uv run pytest --cov=baseball_rag --cov-report=xml --cov-fail-under=70
       - uses: codecov/codecov-action@v4
