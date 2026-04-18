@@ -51,3 +51,20 @@ def build_explanation_prompt(question: str, context_docs: list) -> str:
     """Render a general explanation prompt with retrieved document context."""
     ctx = "\n\n".join(f"[Source: {d.title}]\n{d.text}" for d in context_docs)
     return GENERAL_EXPLANATION_TEMPLATE.render().format(context=ctx, question=question)
+
+
+PLAYER_BIO_TEMPLATE = PromptBundle(
+    system=(
+        "You are a knowledgeable baseball historian. Use the provided player biography "
+        "to answer the user's question about this player.\n"
+        "Include relevant details from the bio: teams played for, years active, position, etc.\n"
+        "Cite the source using [Source: playerID] format."
+    ),
+    user=("Use the following documents to answer:\n\n{context}\n\n---\n\nQuestion: {question}"),
+)
+
+
+def build_player_bio_prompt(question: str, context_docs: list) -> str:
+    """Render a player biography prompt with retrieved document context."""
+    ctx = "\n\n".join(f"[Source: {d.title}]\n{d.text}" for d in context_docs)
+    return PLAYER_BIO_TEMPLATE.render().format(context=ctx, question=question)

@@ -70,50 +70,96 @@ def answer(question: str) -> str:
 
         return "\n".join(lines)
 
+    elif decision.intent == "player_biography":
+        # Player biography: retrieve bio doc from ChromaDB + generate with bio-specific prompt
+        try:
+            chunks = retrieve(decision.player_name or question, top_k=3)
+        except Exception as e:  # noqa: BLE001 — chromadb.errors.NotFoundError not always importable
+            if "NotFoundError" in type(e).__name__ or "not found" in str(e).lower():
+                return "(No corpus indexed yet — run: uv run python -m baseball_rag.corpus.ingest)"
+            logger.exception("ChromaDB retrieval failed for player biography query %r", question)
+            raise
+
+        if not chunks:
+            return (
+                f"No player biography found for '{decision.player_name}'. "
+                f"The player may not be in the dataset or the corpus hasn't been indexed yet."
+            )
+
+        from baseball_rag.generation.prompt import build_player_bio_prompt
+
+        prompt = build_player_bio_prompt(decision.raw_question, chunks)
+
+        try:
+            from baseball_rag.generation.llm import make_request
+
+            response = make_request(prompt)
+            return response.content
+        except ConnectionError:
+            # LM Studio not running — fall back to showing retrieved docs
+            lines = ["(LM Studio not running - showing relevant documents instead):\n"]
+            for chunk in chunks[:3]:
+                lines.append(f"[{chunk.title}]\n{chunk.text}\n")
+            return "\n".join(lines)
+
     else:
-        # RAG path: retrieve + generate
+        # General explanation: RAG retrieval + generation (fallback when LLM unavailable)
         try:
             chunks = retrieve(question, top_k=3)
         except Exception as e:  # noqa: BLE001 — chromadb.errors.NotFoundError not always importable
             if "NotFoundError" in type(e).__name__ or "not found" in str(e).lower():
-                return "(No corpus indexed yet — run: python -m baseball_rag.corpus.ingest)"
+                return "(No corpus indexed yet — run: uv run python -m baseball_rag.corpus.ingest)"
             logger.exception("ChromaDB retrieval failed for query %r", question)
             raise
 
-        from baseball_rag.retrieval.chroma_store import corpus_diagnostics
+        if not chunks:
+            from baseball_rag.retrieval.chroma_store import corpus_diagnostics
 
-        diag = corpus_diagnostics()
+            diag = corpus_diagnostics()
 
-        stat_count = len(diag["corpus_files"]["stat_definitions"])
-        hof_count = len(diag["corpus_files"]["hof_bios"])
-        stat_list = ", ".join(sorted(diag["corpus_files"]["stat_definitions"]))
-        hof_list = ", ".join(sorted(diag["corpus_files"]["hof_bios"]))
+            stat_count = len(diag["corpus_files"]["stat_definitions"])
+            hof_count = len(diag["corpus_files"]["hof_bios"])
+            stat_list = ", ".join(sorted(diag["corpus_files"]["stat_definitions"]))
+            hof_list = ", ".join(sorted(diag["corpus_files"]["hof_bios"]))
 
-        lines = [
-            "No relevant documents found in the corpus for that query.",
-            "",
-            "Available sources:",
-            f"  - Stat definitions ({stat_count}): {stat_list}",
-            f"  - Hall of Fame biographies ({hof_count}): {hof_list}",
-        ]
-
-        if diag["chroma_collection"]["indexed_count"] == 0:
-            lines.append("")
-            lines.append(
-                "Note: ChromaDB index is empty. Run: uv run python -m baseball_rag.corpus.ingest"
-            )
-
-        lines.extend(
-            [
+            lines = [
+                "No relevant documents found in the corpus for that query.",
                 "",
-                "For player stats, try asking directly:",
-                '  baseball-rag "how many HRs did Aaron Judge have in 2024"',
-                '  baseball-rag "who led MLB in RBIs in 2022"',
+                "Available sources:",
+                f"  - Stat definitions ({stat_count}): {stat_list}",
+                f"  - Hall of Fame biographies ({hof_count}): {hof_list}",
             ]
-        )
-        return "\n".join(lines)
+
+            if diag["chroma_collection"]["indexed_count"] == 0:
+                lines.append("")
+                lines.append(
+                    "Note: ChromaDB index is empty. "
+                    "Run: uv run python -m baseball_rag.corpus.ingest"
+                )
+
+            lines.extend(
+                [
+                    "",
+                    "For player stats, try asking directly:",
+                    '  baseball-rag "how many HRs did Aaron Judge have in 2024"',
+                    '  baseball-rag "who led MLB in RBIs in 2022"',
+                ]
+            )
+            return "\n".join(lines)
 
         prompt = build_explanation_prompt(question, chunks)
+
+        try:
+            from baseball_rag.generation.llm import make_request
+
+            response = make_request(prompt)
+            return response.content
+        except ConnectionError:
+            # LM Studio not running — fall back to showing retrieved docs
+            lines = ["(LM Studio not running - showing relevant documents instead):\n"]
+            for chunk in chunks[:3]:
+                lines.append(f"[{chunk.title}]\n{chunk.text}\n")
+            return "\n".join(lines)
 
         try:
             from baseball_rag.generation.llm import make_request
