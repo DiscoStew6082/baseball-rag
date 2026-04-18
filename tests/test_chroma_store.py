@@ -49,3 +49,20 @@ class TestChromaStore:
         results = retrieve("home run records", top_k=5, persist_dir=chroma_db_dir)
         for i in range(len(results) - 1):
             assert results[i].score >= results[i + 1].score
+
+
+class TestChromaPersistDir:
+    def test_retrieve_uses_chroma_persist_dir_env_var(self, monkeypatch, tmp_path):
+        """When CHROMA_PERSIST_DIR is set, retrieve() uses it over the default."""
+        from baseball_rag.corpus.ingest import build_index
+
+        # Build a minimal index in the env-var dir
+        custom_dir = tmp_path / "custom_chroma"
+        build_index(custom_dir)
+
+        # Point CHROMA_PERSIST_DIR at it — retrieve() should find the index there
+        monkeypatch.setenv("CHROMA_PERSIST_DIR", str(custom_dir))
+
+        results = retrieve("RBI definition", top_k=3)
+        assert isinstance(results, list)
+        assert len(results) > 0

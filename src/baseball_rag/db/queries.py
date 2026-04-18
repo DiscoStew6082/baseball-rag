@@ -105,8 +105,8 @@ def get_fielding_leaders(year: int, position: str) -> list[dict]:
         List of dicts with keys: player (name), stat_value (putouts)
     """
     if position.upper() == "OF":
-        pos_clause = "AND f.POS IN ('LF', 'CF', 'RF')"
-        params: list = [year]
+        pos_clause = "AND f.POS IN (?, ?, ?)"
+        params: list = [year, "LF", "CF", "RF"]
     else:
         pos_clause = "AND f.POS = ?"
         params = [year, position.upper()]

@@ -1,11 +1,14 @@
 """Baseball RAG query engine — CLI entry point."""
 
+import logging
 import sys
 
 from baseball_rag.db import get_career_stat_leaders, get_player_stat, get_stat_leaders, init_db
 from baseball_rag.generation.prompt import build_explanation_prompt
 from baseball_rag.retrieval.chroma_store import retrieve
 from baseball_rag.routing import route
+
+logger = logging.getLogger(__name__)
 
 
 def answer(question: str) -> str:
@@ -70,8 +73,11 @@ def answer(question: str) -> str:
         # RAG path: retrieve + generate
         try:
             chunks = retrieve(question, top_k=3)
-        except Exception:  # noqa: BLE001 — chromadb.errors.NotFoundError not always importable
-            return "(No corpus indexed yet — run: python -m baseball_rag.corpus.ingest)"
+        except Exception as e:  # noqa: BLE001 — chromadb.errors.NotFoundError not always importable
+            if "NotFoundError" in type(e).__name__ or "not found" in str(e).lower():
+                return "(No corpus indexed yet — run: python -m baseball_rag.corpus.ingest)"
+            logger.exception("ChromaDB retrieval failed for query %r", question)
+            raise
 
         if not chunks:
             return "I don't have any relevant information to answer that question."

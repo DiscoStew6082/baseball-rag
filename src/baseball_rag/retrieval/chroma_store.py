@@ -42,6 +42,20 @@ class RetrievedChunk:
     score: float
 
 
+def _resolve_persist_dir(persist_dir: Path | None) -> Path:
+    """Resolve the persist directory, checking CHROMA_PERSIST_DIR env var first."""
+    if persist_dir is not None:
+        return persist_dir
+    import os
+
+    env_path = os.environ.get("CHROMA_PERSIST_DIR")
+    if env_path:
+        return Path(env_path)
+    from baseball_rag.db.duckdb_schema import DATA_DIR
+
+    return DATA_DIR
+
+
 def get_store(persist_dir: Path) -> chromadb.Collection:
     """Open or create the baseball corpus collection."""
     client = chromadb.PersistentClient(path=str(persist_dir))
@@ -63,9 +77,7 @@ def retrieve(query: str, top_k: int = 3, persist_dir: Path | None = None) -> lis
         List of RetrievedChunk objects sorted by relevance (best first).
     """
     if persist_dir is None:
-        from baseball_rag.db.duckdb_schema import DATA_DIR
-
-        persist_dir = DATA_DIR
+        persist_dir = _resolve_persist_dir(None)
 
     collection = get_store(persist_dir)
 
