@@ -116,3 +116,35 @@ def retrieve(query: str, top_k: int = 3, persist_dir: Path | None = None) -> lis
         List of RetrievedChunk objects sorted by relevance (best first).
     """
     return _retrieve_impl(query, top_k=top_k, persist_dir=persist_dir)
+
+
+def corpus_diagnostics(persist_dir: Path | None = None) -> dict:
+    """Return a dict describing what's available in the corpus and data layer."""
+    if persist_dir is None:
+        persist_dir = _resolve_persist_dir(None)
+
+    from baseball_rag.corpus import get_hof_bios, get_stat_defs
+
+    stat_defs = get_stat_defs()
+    hof_bios = get_hof_bios()
+
+    corpus_count = 0
+    collection_exists = False
+    try:
+        client = chromadb.PersistentClient(path=str(persist_dir))
+        col = client.get_collection(COLLECTION_NAME)
+        corpus_count = col.count()
+        collection_exists = True
+    except Exception:
+        pass
+
+    return {
+        "corpus_files": {
+            "stat_definitions": [p.stem for p in stat_defs],
+            "hof_bios": [p.stem for p in hof_bios],
+        },
+        "chroma_collection": {
+            "exists": collection_exists,
+            "indexed_count": corpus_count,
+        },
+    }

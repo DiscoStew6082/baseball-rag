@@ -80,8 +80,38 @@ def answer(question: str) -> str:
             logger.exception("ChromaDB retrieval failed for query %r", question)
             raise
 
-        if not chunks:
-            return "I don't have any relevant information to answer that question."
+        from baseball_rag.retrieval.chroma_store import corpus_diagnostics
+
+        diag = corpus_diagnostics()
+
+        stat_count = len(diag["corpus_files"]["stat_definitions"])
+        hof_count = len(diag["corpus_files"]["hof_bios"])
+        stat_list = ", ".join(sorted(diag["corpus_files"]["stat_definitions"]))
+        hof_list = ", ".join(sorted(diag["corpus_files"]["hof_bios"]))
+
+        lines = [
+            "No relevant documents found in the corpus for that query.",
+            "",
+            "Available sources:",
+            f"  - Stat definitions ({stat_count}): {stat_list}",
+            f"  - Hall of Fame biographies ({hof_count}): {hof_list}",
+        ]
+
+        if diag["chroma_collection"]["indexed_count"] == 0:
+            lines.append("")
+            lines.append(
+                "Note: ChromaDB index is empty. Run: uv run python -m baseball_rag.corpus.ingest"
+            )
+
+        lines.extend(
+            [
+                "",
+                "For player stats, try asking directly:",
+                '  baseball-rag "how many HRs did Aaron Judge have in 2024"',
+                '  baseball-rag "who led MLB in RBIs in 2022"',
+            ]
+        )
+        return "\n".join(lines)
 
         prompt = build_explanation_prompt(question, chunks)
 
