@@ -6,6 +6,8 @@ from typing import Iterator
 
 import requests
 
+from baseball_rag.arch.tracing import traced
+
 
 @dataclass
 class LLMResponse:
@@ -18,6 +20,7 @@ DEFAULT_BASE_URL = "http://localhost:1234/v1"
 DEFAULT_MODEL = "google/gemma-4-26b-a4b"
 
 
+@traced(component_id="llm", label="Generate Answer")
 def make_request(
     prompt: str,
     base_url: str | None = None,

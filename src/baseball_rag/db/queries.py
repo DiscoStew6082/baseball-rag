@@ -2,6 +2,7 @@
 
 import duckdb
 
+from baseball_rag.arch.tracing import traced
 from baseball_rag.db.duckdb_schema import TEAM_MAP, get_duckdb
 
 
@@ -10,6 +11,7 @@ def _team_name(team_id: str) -> str:
     return TEAM_MAP.get(team_id, "Unknown")
 
 
+@traced(component_id="duckdb", label="DB Query")
 def get_stat_leaders(stat: str, year: int) -> list[dict]:
     """Get top 10 batting stat leaders for a given year.
 
@@ -54,6 +56,7 @@ def get_stat_leaders(stat: str, year: int) -> list[dict]:
     return [{"name": r[0], "team": _team_name(r[1]), "stat_value": r[2]} for r in result]
 
 
+@traced(component_id="duckdb", label="DB Query")
 def get_career_stat_leaders(stat: str, limit: int = 10) -> list[dict]:
     """Get career batting stat leaders.
 

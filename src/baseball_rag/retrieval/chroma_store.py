@@ -7,6 +7,7 @@ import chromadb
 import numpy as np
 
 from baseball_rag import embedder as _embedder
+from baseball_rag.arch.tracing import traced
 
 COLLECTION_NAME = "baseball_corpus"
 
@@ -65,17 +66,10 @@ def get_store(persist_dir: Path) -> chromadb.Collection:
     )
 
 
-def retrieve(query: str, top_k: int = 3, persist_dir: Path | None = None) -> list[RetrievedChunk]:
-    """Embed query and retrieve top-K relevant chunks.
-
-    Args:
-        query: Natural language search query
-        top_k: Number of results to return
-        persist_dir: Where the ChromaDB is stored. Defaults to data/chroma_db/.
-
-    Returns:
-        List of RetrievedChunk objects sorted by relevance (best first).
-    """
+def _retrieve_impl(
+    query: str, top_k: int = 3, persist_dir: Path | None = None
+) -> list[RetrievedChunk]:
+    """Core retrieval implementation — no tracing overhead."""
     if persist_dir is None:
         persist_dir = _resolve_persist_dir(None)
 
@@ -107,3 +101,18 @@ def retrieve(query: str, top_k: int = 3, persist_dir: Path | None = None) -> lis
         )
 
     return chunks
+
+
+@traced(component_id="chroma-store", label="Vector Retrieval")
+def retrieve(query: str, top_k: int = 3, persist_dir: Path | None = None) -> list[RetrievedChunk]:
+    """Embed query and retrieve top-K relevant chunks.
+
+    Args:
+        query: Natural language search query
+        top_k: Number of results to return
+        persist_dir: Where the ChromaDB is stored. Defaults to data/chroma_db/.
+
+    Returns:
+        List of RetrievedChunk objects sorted by relevance (best first).
+    """
+    return _retrieve_impl(query, top_k=top_k, persist_dir=persist_dir)

@@ -1,0 +1,156 @@
+"""Tests for Dashboard integration — Phase 4.
+
+Replaces web_app.py ChatInterface with a tabbed dashboard:
+- Tab "Query": existing Q&A functionality (ChatInterface)
+- Tab "Architecture": ArchitectureDiagram with full pipeline visualization
+
+The dashboard wires the Query tab's answer() calls through the tracing
+instrumentation so the Architecture Explorer shows every query execution.
+"""
+
+from unittest.mock import patch
+
+from baseball_rag.arch.diagram import ArchitectureDiagram
+
+# --------------------------------------------------------------------------
+# Phase 4.1 — Dashboard structure
+# --------------------------------------------------------------------------
+
+
+class TestDashboardTabs:
+    """Dashboard must expose two tabs: Query and Architecture."""
+
+    def setup_method(self):
+        from baseball_rag.web_app import build_dashboard
+
+        self.dash = build_dashboard()
+
+    def test_dashboard_has_query_and_arch_components(self):
+        """Dashboard exposes arch_diagram and a respond function."""
+        from baseball_rag.web_app import build_dashboard
+
+        dash = build_dashboard()
+        # Dashboard is a gr.Blocks with an attached arch_diagram
+        assert hasattr(dash, "arch_diagram")
+        # The diagram has the expected interface
+        diag = dash.arch_diagram
+        assert hasattr(diag, "registry")
+        assert hasattr(diag, "animate_trace")
+
+    def test_query_tab_uses_chat_interface(self):
+        """Query tab contains a ChatInterface-compatible respond function."""
+        from baseball_rag.web_app import respond
+
+        result = respond("who had the most RBIs in 1962", [])
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    def test_architecture_tab_has_diagram(self):
+        """Architecture tab exposes an ArchitectureDiagram instance."""
+        diagram = getattr(self.dash, "arch_diagram", None)
+        assert diagram is not None
+        # Check it has the expected registry-based structure
+        assert hasattr(diagram, "registry")
+        assert hasattr(diagram, "highlight")
+        assert hasattr(diagram, "animate_trace")
+
+
+# --------------------------------------------------------------------------
+# Phase 4.2 — Trace wiring: query tab → arch diagram
+# --------------------------------------------------------------------------
+
+
+class TestTraceWiring:
+    """answer() call in the Query tab is traced and visible in Architecture tab."""
+
+    def setup_method(self):
+        from baseball_rag.web_app import build_dashboard
+
+        self.dash = build_dashboard()
+
+    def test_query_produces_trace_in_diagram_history(self):
+        """A real query via respond() produces a trace in the diagram history.
+
+        This exercises the full wiring: start_trace → @traced pipeline functions →
+        finish_trace → animate_trace(trace) called on the diagram.
+        """
+        from baseball_rag.web_app import build_dashboard
+
+        dash = build_dashboard()
+        diagram = dash.arch_diagram
+        # Clear any prior history
+        diagram.trace_history.clear()
+
+        # We must patch skip_btn.click itself so that animate_trace's .click() call
+        # (which requires a live Gradio Blocks context) is a no-op.
+        # trace_history still grows because we don't mock animate_trace itself —
+        # only its Gradio-side effects.
+        with patch.object(diagram.skip_btn, "click"):
+            from baseball_rag.web_app import respond
+
+            respond("who had the most RBIs in 1962", [], diagram=diagram)
+
+        assert len(diagram.trace_history) >= 1
+        trace = diagram.trace_history[-1]
+        assert trace.query == "who had the most RBIs in 1962"
+        assert len(trace.stages) >= 1
+
+    def test_trace_shows_correct_route_type(self):
+        """Trace correctly records stat_query vs general_explanation route."""
+        from baseball_rag.arch.tracing import finish_trace, start_trace, traced
+        from baseball_rag.web_app import build_dashboard
+
+        dash = build_dashboard()
+        diagram: ArchitectureDiagram = dash.arch_diagram
+        diagram.trace_history.clear()
+
+        # Simulate a stat_query trace manually via the tracing API
+        start_trace("who had the most RBIs in 1962")
+        with traced(component_id="cli", label="CLI"):
+            pass
+        with traced(
+            component_id="query-router",
+            label="Query Router",
+            output_summary="stat_query",
+        ):
+            pass
+        with traced(
+            component_id="duckdb",
+            label="DuckDB Query",
+            output_summary="Mickey Mantle 123 RBIs",
+        ):
+            pass
+        trace = finish_trace(route_type="stat_query")
+        if trace:
+            diagram.trace_history.append(trace)
+
+        assert len(diagram.trace_history) == 1
+        assert diagram.trace_history[0].route_type == "stat_query"
+
+
+# --------------------------------------------------------------------------
+# Phase 4.3 — Dashboard launch
+# --------------------------------------------------------------------------
+
+
+class TestDashboardLaunch:
+    """The dashboard can be launched and responds to requests."""
+
+    def test_build_dashboard_returns_a_gradio_blocks(self):
+        """build_dashboard() returns a gr.Blocks instance."""
+        import gradio
+
+        from baseball_rag.web_app import build_dashboard
+
+        dash = build_dashboard()
+        assert isinstance(dash, gradio.Blocks)
+
+    def test_web_app_module_has_main_block(self):
+        """web_app.py defines a `demo` Blocks (for uvicorn/Gradio hosting)."""
+        import gradio
+
+        from baseball_rag import web_app
+
+        assert hasattr(web_app, "demo")
+        # demo should be launchable or mountable
+        assert isinstance(web_app.demo, gradio.Blocks)

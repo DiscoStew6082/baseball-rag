@@ -4,6 +4,8 @@ import datetime
 import re
 from dataclasses import dataclass
 
+from baseball_rag.arch.tracing import traced
+
 
 @dataclass
 class RouteResult:
@@ -127,6 +129,7 @@ def _extract_player(text: str) -> str | None:
     return None
 
 
+@traced(component_id="query-router", label="Route Query")
 def route(question: str) -> RouteResult:
     """Classify a natural language question into intent + extracted arguments.
 
