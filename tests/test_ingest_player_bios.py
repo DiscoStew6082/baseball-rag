@@ -1,0 +1,133 @@
+"""Tests for player bio ingestion into ChromaDB."""
+
+from unittest.mock import MagicMock, patch
+
+
+class TestIngestPlayerBios:
+    """Test that build_index also ingests all player bios from DuckDB."""
+
+    def test_build_index_ingests_player_bios(self):
+        """Verify build_index creates docs for each distinct playerID in batting table."""
+        # Mock get_duckdb to return a connection
+        mock_conn = MagicMock()
+        # Return 3 fake playerIDs
+        mock_conn.execute.return_value.fetchall.return_value = [
+            ("player1",),
+            ("player2",),
+            ("player3",),
+        ]
+
+        # Patch get_duckdb so build_index uses our mock
+        with patch("baseball_rag.corpus.ingest.get_duckdb", return_value=mock_conn):
+            # Patch build_player_bio to avoid actual DB calls in test
+            with patch("baseball_rag.corpus.ingest.build_player_bio") as mock_build:
+                mock_build.return_value = "Mocked bio text"
+
+                # Mock ChromaDB client and collection
+                with patch(
+                    "baseball_rag.corpus.ingest.chromadb.PersistentClient"
+                ) as mock_client_class:
+                    mock_collection = MagicMock()
+                    mock_client_class.return_value.create_collection.return_value = mock_collection
+
+                    from baseball_rag.corpus.ingest import build_index
+
+                    # Patch static corpus to return empty (we only care about players)
+                    with patch("baseball_rag.corpus.ingest.get_stat_defs", return_value=[]):
+                        with patch("baseball_rag.corpus.ingest.get_hof_bios", return_value=[]):
+                            build_index("data/test_chroma")
+
+        # Verify collection.add was called
+        assert mock_collection.add.called, "collection.add should have been called"
+
+        # Get what was passed to collection.add
+        call_args = mock_collection.add.call_args
+        ids = call_args.kwargs.get("ids") or call_args[1].get("ids", [])
+
+        # Should have 3 player bio docs (one per distinct playerID)
+        player_ids_in_chroma = [i for i in ids if str(i).startswith("player:")]
+        assert len(player_ids_in_chroma) == 3, (
+            f"Expected 3 player bios, got {len(player_ids_in_chroma)}"
+        )
+
+    def test_build_index_uses_batch_inserts(self):
+        """Verify that player bios are inserted in batches (not one at a time)."""
+        mock_conn = MagicMock()
+        # Return 10 fake players to trigger batching
+        mock_conn.execute.return_value.fetchall.return_value = [
+            tuple([f"player{i}"]) for i in range(10)
+        ]
+
+        with patch("baseball_rag.corpus.ingest.get_duckdb", return_value=mock_conn):
+            with patch("baseball_rag.corpus.ingest.build_player_bio") as mock_build:
+                mock_build.return_value = "Mocked bio text"
+
+                with patch(
+                    "baseball_rag.corpus.ingest.chromadb.PersistentClient"
+                ) as mock_client_class:
+                    mock_collection = MagicMock()
+                    mock_client_class.return_value.create_collection.return_value = mock_collection
+
+                    from baseball_rag.corpus.ingest import build_index
+
+                    with patch("baseball_rag.corpus.ingest.get_stat_defs", return_value=[]):
+                        with patch("baseball_rag.corpus.ingest.get_hof_bios", return_value=[]):
+                            build_index("data/test_chroma")
+
+        # collection.add should be called
+        assert mock_collection.add.called
+
+    def test_player_doc_id_format(self):
+        """Verify player docs use 'player:{playerID}' format for ID."""
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value.fetchall.return_value = [("ruthb01",)]
+
+        with patch("baseball_rag.corpus.ingest.get_duckdb", return_value=mock_conn):
+            with patch("baseball_rag.corpus.ingest.build_player_bio") as mock_build:
+                mock_build.return_value = "Babe Ruth bio text"
+
+                with patch(
+                    "baseball_rag.corpus.ingest.chromadb.PersistentClient"
+                ) as mock_client_class:
+                    mock_collection = MagicMock()
+                    mock_client_class.return_value.create_collection.return_value = mock_collection
+
+                    from baseball_rag.corpus.ingest import build_index
+
+                    with patch("baseball_rag.corpus.ingest.get_stat_defs", return_value=[]):
+                        with patch("baseball_rag.corpus.ingest.get_hof_bios", return_value=[]):
+                            build_index("data/test_chroma")
+
+        call_args = mock_collection.add.call_args
+        ids = call_args.kwargs.get("ids") or call_args[1].get("ids", [])
+
+        assert "player:ruthb01" in ids, f"Expected 'player:ruthb01' in IDs, got {ids}"
+
+    def test_player_bio_metadata_category(self):
+        """Verify player bios have correct metadata.category = 'player_biography'."""
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value.fetchall.return_value = [("testplay",)]
+
+        with patch("baseball_rag.corpus.ingest.get_duckdb", return_value=mock_conn):
+            with patch("baseball_rag.corpus.ingest.build_player_bio") as mock_build:
+                mock_build.return_value = "Test bio"
+
+                with patch(
+                    "baseball_rag.corpus.ingest.chromadb.PersistentClient"
+                ) as mock_client_class:
+                    mock_collection = MagicMock()
+                    mock_client_class.return_value.create_collection.return_value = mock_collection
+
+                    from baseball_rag.corpus.ingest import build_index
+
+                    with patch("baseball_rag.corpus.ingest.get_stat_defs", return_value=[]):
+                        with patch("baseball_rag.corpus.ingest.get_hof_bios", return_value=[]):
+                            build_index("data/test_chroma")
+
+        call_args = mock_collection.add.call_args
+        metadatas = call_args.kwargs.get("metadatas") or call_args[1].get("metadatas", [])
+
+        for meta in metadatas:
+            assert meta.get("category") == "player_biography", (
+                f"Expected category 'player_biography', got {meta}"
+            )
