@@ -10,7 +10,7 @@ from baseball_rag.arch.tracing import traced
 class RouteResult:
     """Parsed result from classifying a user query."""
 
-    intent: str  # "stat_query" | "general_explanation"
+    intent: str  # "stat_query" | "player_biography" | "general_explanation"
     stat: str | None  # e.g., "RBI", "HR"
     year: int | None  # e.g., 1962
     position: str | None  # e.g., "OF", "CF"
@@ -23,7 +23,10 @@ _ROUTING_PROMPT = (
     "respond with ONLY valid JSON (no markdown, no explanation).\n\n"
     "Identify:\n"
     "- intent: 'stat_query' if asking about a specific stat for a player or "
-    "league-wide leaders; 'general_explanation' otherwise\n"
+    "league-wide leaders; 'player_biography' if asking about a specific player's "
+    "career history, teams, biographical info (e.g., 'who was Wally Pipp', "
+    "'what teams did he play for', 'tell me about this player'); "
+    "'general_explanation' otherwise\n"
     "- stat: the canonical stat name if detectable (RBI, HR, AVG, ERA, WHIP, SO, SB, 2B,"
     " 3B, W, L, PO, etc.); null otherwise\n"
     "- year: the season/year mentioned (integer); null if none\n"
@@ -39,10 +42,19 @@ _ROUTING_PROMPT = (
     '- "how many HRs did Aaron Judge have last year" → '
     '{{"intent":"stat_query","stat":"HR","year":null,"position":null,'
     '"player_name":"Aaron Judge"}}\n'
-    '- "what is a forced play in baseball" → '
+    '- "who was Wally Pipp" → '
+    '{{"intent":"player_biography","stat":null,"year":null,"position":null,'
+    '"player_name":"Wally Pipp"}}\n'
+    '- "what teams did he play for" → '
+    '{{"intent":"player_biography","stat":null,"year":null,"position":null,'
+    '"player_name":null}}\n'
+    '- "tell me about this player" → '
+    '{{"intent":"player_biography","stat":null,"year":null,"position":null,'
+    '"player_name":null}}\n'
+    "- 'what is a forced play in baseball' → "
     '{{"intent":"general_explanation","stat":null,"year":null,'
     '"position":null,"player_name":null}}'
-    "Question: {question}"
+    "\nQuestion: {question}"
 )
 
 
@@ -112,7 +124,7 @@ def route(question: str) -> RouteResult:
         response = make_request(prompt, max_tokens=500, temperature=0.1)
         data = _parse_llm_json(response.content)
 
-        if data and data.get("intent") in ("stat_query", "general_explanation"):
+        if data and data.get("intent") in ("stat_query", "player_biography", "general_explanation"):
             return RouteResult(
                 intent=data["intent"],
                 stat=data.get("stat"),
