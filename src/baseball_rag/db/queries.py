@@ -151,13 +151,25 @@ def _normalize(s: str) -> str:
     return re.sub(r"[^a-z]", "", unidecode(unicodedata.normalize("NFD", s)).lower())
 
 
-def get_player_stat(conn: duckdb.DuckDBPyConnection, player_name: str, stat: str) -> dict | None:
-    """Get a single player's stat for their most recent season.
+def _is_suffix(s: str) -> bool:
+    """Return True if s is a common baseball name suffix (case-insensitive, strips trailing .)."""
+    return s.lower().rstrip(".") in {"jr", "sr", "ii", "iii", "iv"}
+
+
+def get_player_stat(
+    conn: duckdb.DuckDBPyConnection,
+    player_name: str,
+    stat: str,
+    year: int | None = None,
+) -> dict | None:
+    """Get a single player's stat for a specific season (or their most recent if no year given).
 
     Args:
         conn: Active DuckDB connection.
         player_name: Full name e.g. "Ronald Acuna" or "Matt Olson".
+            Suffixes like "Jr.", "Sr.", "III" are handled automatically.
         stat: The statistic to fetch (HR, RBI, etc.).
+        year: Optional specific season year.
 
     Returns:
         Dict with keys: name, year, team, stat_value, or None if not found.
@@ -176,13 +188,16 @@ def get_player_stat(conn: duckdb.DuckDBPyConnection, player_name: str, stat: str
     }
     col = col_map.get(stat, stat)
 
-    # Split player name into first/last
-    parts = player_name.strip().split()
+    # Split player name into first/last, stripping common suffixes
+    parts = [p for p in player_name.strip().split() if not _is_suffix(p)]
     if len(parts) >= 2:
-        first, last = parts[0], parts[-1]
-    else:
+        first, last = parts[0], " ".join(parts[1:])  # Handle multi-word last names
+    elif len(parts) == 1:
         last = parts[0]
         first = None
+    else:
+        return None
+
     norm_first = _normalize(first) if first else None
     norm_last = _normalize(last)
 
@@ -196,6 +211,10 @@ def get_player_stat(conn: duckdb.DuckDBPyConnection, player_name: str, stat: str
     else:
         where_clause = "strip_accents(LOWER(p.nameLast)) = ?"
         params = [norm_last]
+
+    if year is not None:
+        where_clause += " AND b.yearID = ?"
+        params.append(year)
 
     query = f"""
     SELECT

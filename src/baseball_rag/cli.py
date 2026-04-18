@@ -31,17 +31,18 @@ def answer(question: str) -> str:
         stat = decision.stat or "HR"
         year = decision.year
 
-        # If player name detected but no explicit year → get their latest-year stats
-        if decision.player_name and not year:
+        # Player-specific query — get their stat for the specified year (or latest)
+        if decision.player_name:
             from baseball_rag.db.duckdb_schema import get_duckdb
 
             conn = get_duckdb()
-            result = get_player_stat(conn, decision.player_name, stat)
+            result = get_player_stat(conn, decision.player_name, stat, year=year)
             if result:
                 team_str = f" ({result['team']})" if result["team"] else ""
                 return (
                     f"{result['name']}{team_str} ({result['year']}): {result['stat_value']} {stat}"
                 )
+            # Player found but no stat for that year — fall through to leaders
 
         if year:
             rows = get_stat_leaders(stat, year)
