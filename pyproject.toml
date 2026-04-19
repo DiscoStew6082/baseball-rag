@@ -40,6 +40,11 @@ packages = ["src/baseball_rag", "src/mlb_api_mcp"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "unit: fast, mocked tests — no external services required",
+    "integration: requires live services (ChromaDB, LM Studio, Gradio, etc.)",
+    "slow: long-running or heavy setup (full pipeline runs, ingestion)",
+]
 
 [tool.coverage.run]
 source = ["src/baseball_rag"]

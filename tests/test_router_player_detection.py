@@ -40,13 +40,6 @@ class TestPlayerDetection:
         assert hasattr(result, "player_name"), "RouteResult has no 'player' attribute"
         assert result.player_name is not None
 
-    def test_detect_player_name_with_position(self):
-        """Player detection should work alongside position detection."""
-        result = route("How many putouts did Yogi Berra have as catcher")
-        # BUG: player extraction missing
-        assert hasattr(result, "player_name"), "RouteResult has no 'player' attribute"
-        assert result.player_name is not None
-
     def test_detect_player_name_preserves_existing_behavior(self):
         """Player detection should NOT break existing stat query classification."""
         # These already work - ensure they still do

@@ -12,6 +12,7 @@ from baseball_rag.arch.tracing import traced
 COLLECTION_NAME = "baseball_corpus"
 
 
+@chromadb.api.collection_configuration.register_embedding_function
 class LMStudioEmbeddingFunction(chromadb.EmbeddingFunction[chromadb.Documents]):
     def __init__(self) -> None:
         pass  # uses module-level defaults / env vars

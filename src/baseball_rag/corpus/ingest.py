@@ -89,7 +89,7 @@ def build_index(persist_dir: Path) -> None:
                 }
             )
         except Exception as e:
-            print(f"Warning: Could not build bio for {player_id}: {e}")
+            raise RuntimeError(f"Failed to build bio for {player_id}: {e}") from e
 
         # Print progress every 1000 players
         if (idx + 1) % 1000 == 0:

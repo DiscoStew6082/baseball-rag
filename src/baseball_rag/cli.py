@@ -161,18 +161,6 @@ def answer(question: str) -> str:
                 lines.append(f"[{chunk.title}]\n{chunk.text}\n")
             return "\n".join(lines)
 
-        try:
-            from baseball_rag.generation.llm import make_request
-
-            response = make_request(prompt)
-            return response.content
-        except ConnectionError:
-            # LM Studio not running — fall back to showing retrieved docs
-            lines = ["(LM Studio not running - showing relevant documents instead):\n"]
-            for chunk in chunks[:3]:
-                lines.append(f"[{chunk.title}]\n{chunk.text}\n")
-            return "\n".join(lines)
-
 
 def main() -> None:
     if len(sys.argv) < 2 or sys.argv[1] == "--help":

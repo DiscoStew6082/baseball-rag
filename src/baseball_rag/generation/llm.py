@@ -2,7 +2,7 @@
 
 import os
 from dataclasses import dataclass
-from typing import Iterator
+from typing import Iterator, cast
 
 import requests
 
@@ -20,9 +20,63 @@ DEFAULT_BASE_URL = "http://localhost:1234/v1"
 DEFAULT_MODEL = "google/gemma-4-26b-a4b"
 
 
+def _resolve_config(base_url: str | None, model: str | None) -> tuple[str, str]:
+    """Resolve base_url and model, falling back to environment or defaults."""
+    resolved_url = cast(str, base_url or os.environ.get("LMSTUDIO_BASE_URL", DEFAULT_BASE_URL))
+    resolved_model = cast(str, model or os.environ.get("LMSTUDIO_MODEL", DEFAULT_MODEL))
+    return resolved_url, resolved_model
+
+
+def _build_payload(
+    model: str,
+    messages: list[dict],
+    max_tokens: int,
+    temperature: float,
+    stream: bool = False,
+) -> dict:
+    """Build the common request payload for both streaming and non-streaming."""
+    return {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "stream": stream,
+    }
+
+
+def _post(base_url: str, payload: dict, timeout: int = 120) -> requests.Response:
+    """POST to the chat completions endpoint with a friendly error message."""
+    try:
+        resp = requests.post(f"{base_url}/chat/completions", json=payload, timeout=timeout)
+        resp.raise_for_status()
+        return resp
+    except requests.ConnectionError as exc:
+        raise ConnectionError(
+            f"Could not connect to LM Studio at {base_url}. "
+            "Is the server running? (Start LM Studio → Server tab → Start server)"
+        ) from exc
+
+
+def _strip_reasoning_block(text: str) -> str:
+    """Strip Gemma 4's internal planning/scaffolding block from response start.
+
+    Gemma 4 sometimes prepends a structured reasoning section where every line
+    starts with ``*``, ``-``, or backtick. The real answer begins at the first
+    non-list line.
+    """
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        # If line doesn't start with a list marker, this is where real content starts
+        if not (stripped.startswith("*") or stripped.startswith("-") or stripped.startswith("`")):
+            return "\n".join(lines[i:])
+    # No clear boundary found — return as-is
+    return text
+
+
 @traced(component_id="llm", label="Generate Answer")
 def make_request(
-    prompt: str,
+    prompt: str | tuple[str, str],
     base_url: str | None = None,
     model: str | None = None,
     max_tokens: int = 512,
@@ -31,7 +85,8 @@ def make_request(
     """Send a chat-style prompt to LM Studio and return the response.
 
     Args:
-        prompt: The full rendered prompt (system + user content).
+        prompt: Either a plain string (backward compat — treated as user message only)
+            or a (system_prompt, user_prompt) tuple for proper system+user structure.
         base_url: LM Studio server URL. Defaults to localhost:1234.
         model: Model name to specify in request.
         max_tokens: Max new tokens to generate.
@@ -43,60 +98,49 @@ def make_request(
     Raises:
         ConnectionError: If LM Studio is not running at the given URL.
     """
-    base_url = base_url or os.environ.get("LMSTUDIO_BASE_URL", DEFAULT_BASE_URL)
-    model = model or os.environ.get("LMSTUDIO_MODEL", DEFAULT_MODEL)
+    base_url, model = _resolve_config(base_url, model)
 
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "stream": False,
-    }
+    if isinstance(prompt, tuple):
+        system_prompt, user_prompt = prompt
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+    else:
+        messages = [{"role": "user", "content": prompt}]
 
-    try:
-        resp = requests.post(f"{base_url}/chat/completions", json=payload, timeout=120)
-        resp.raise_for_status()
-    except requests.ConnectionError as exc:
-        raise ConnectionError(
-            f"Could not connect to LM Studio at {base_url}. "
-            "Is the server running? (Start LM Studio → Server tab → Start server)"
-        ) from exc
+    payload = _build_payload(model, messages, max_tokens, temperature)
+    resp = _post(base_url, payload)
 
     data = resp.json()
     choice = data["choices"][0]["message"]
-    # Gemma 4 may put response text in reasoning_content instead of content
-    return LLMResponse(
-        content=choice.get("content") or choice.get("reasoning_content", ""),
-        model=data.get("model", model),
-        done=True,
-    )
+    raw = choice.get("content") or choice.get("reasoning_content", "")
+    content = _strip_reasoning_block(raw)
+
+    return LLMResponse(content=content, model=data.get("model", model), done=True)
 
 
 def make_request_stream(
-    prompt: str,
+    prompt: str | tuple[str, str],
     base_url: str | None = None,
     model: str | None = None,
     max_tokens: int = 512,
     temperature: float = 0.3,
 ) -> Iterator[str]:
     """Streaming version — yields content tokens as they arrive."""
-    base_url = base_url or os.environ.get("LMSTUDIO_BASE_URL", DEFAULT_BASE_URL)
-    model = model or os.environ.get("LMSTUDIO_MODEL", DEFAULT_MODEL)
+    base_url, model = _resolve_config(base_url, model)
 
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "stream": True,
-    }
+    if isinstance(prompt, tuple):
+        system_prompt, user_prompt = prompt
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+    else:
+        messages = [{"role": "user", "content": prompt}]
 
-    try:
-        resp = requests.post(f"{base_url}/chat/completions", json=payload, timeout=120, stream=True)
-        resp.raise_for_status()
-    except requests.ConnectionError as exc:
-        raise ConnectionError(f"Could not connect to LM Studio at {base_url}.") from exc
+    payload = _build_payload(model, messages, max_tokens, temperature, stream=True)
+    resp = _post(base_url, payload)
 
     for line in resp.iter_lines(decode_unicode=True):
         if not line or line == "data: [DONE]":
@@ -106,7 +150,6 @@ def make_request_stream(
 
             chunk = _json.loads(line[6:])
             delta = chunk.get("choices", [{}])[0].get("delta", {})
-            # Gemma 4 puts response in reasoning_content, not content
-            token = delta.get("content") or delta.get("reasoning_content", "")
+            token = delta.get("content", "") + delta.get("reasoning_content", "")
             if token:
                 yield token
