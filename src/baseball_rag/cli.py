@@ -4,6 +4,7 @@ import logging
 import sys
 
 from baseball_rag.db import get_career_stat_leaders, get_player_stat, get_stat_leaders, init_db
+from baseball_rag.db.duckdb_schema import get_duckdb
 from baseball_rag.generation.prompt import build_explanation_prompt
 from baseball_rag.retrieval.chroma_store import retrieve
 from baseball_rag.routing import route
@@ -33,8 +34,6 @@ def answer(question: str) -> str:
 
         # Player-specific query — get their stat for the specified year (or latest)
         if decision.player_name:
-            from baseball_rag.db.duckdb_schema import get_duckdb
-
             conn = get_duckdb()
             result = get_player_stat(conn, decision.player_name, stat, year=year)
             if result:
@@ -48,8 +47,6 @@ def answer(question: str) -> str:
             rows = get_stat_leaders(stat, year)
             if not rows and decision.player_name:
                 # Requested year had no results for this player — show their latest
-                from baseball_rag.db.duckdb_schema import get_duckdb
-
                 conn = get_duckdb()
                 result = get_player_stat(conn, decision.player_name, stat)
                 if result:
@@ -101,6 +98,22 @@ def answer(question: str) -> str:
             for chunk in chunks[:3]:
                 lines.append(f"[{chunk.title}]\n{chunk.text}\n")
             return "\n".join(lines)
+
+    elif decision.intent == "freeform_query":
+        from baseball_rag.db.freeform import format_result, query
+
+        conn = get_duckdb()
+        query_result = query(decision.raw_question, conn)
+
+        # If empty, try to be helpful before giving up entirely
+        if query_result.row_count == 0:
+            return (
+                f"No results found for '{decision.raw_question}'.\n"
+                "Try rephrasing — e.g., 'who played for the Boston Braves in 1936'\n"
+                "(the Braves were in Boston until 1965, then Atlanta from 1966)."
+            )
+
+        return format_result(query_result, decision.raw_question)
 
     else:
         # General explanation: RAG retrieval + generation (fallback when LLM unavailable)

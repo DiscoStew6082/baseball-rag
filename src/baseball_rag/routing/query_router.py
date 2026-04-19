@@ -10,7 +10,7 @@ from baseball_rag.arch.tracing import traced
 class RouteResult:
     """Parsed result from classifying a user query."""
 
-    intent: str  # "stat_query" | "player_biography" | "general_explanation"
+    intent: str  # "stat_query" | "player_biography" | "freeform_query" | "general_explanation"
     stat: str | None  # e.g., "RBI", "HR"
     year: int | None  # e.g., 1962
     position: str | None  # e.g., "OF", "CF"
@@ -53,7 +53,13 @@ _ROUTING_PROMPT = (
     '"player_name":null}}\n'
     "- 'what is a forced play in baseball' → "
     '{{"intent":"general_explanation","stat":null,"year":null,'
-    '"position":null,"player_name":null}}'
+    '"position":null,"player_name":null}}\n'
+    '- "who played for the Braves in 1936" → '
+    '{{"intent":"freeform_query","stat":null,"year":1936,"position":null,'
+    '"player_name":null}}\n'
+    '- "list all pitchers with over 300 wins" → '
+    '{{"intent":"freeform_query","stat":null,"year":null,"position":null,'
+    '"player_name":null}}\n'
     "\nQuestion: {question}"
 )
 
@@ -124,7 +130,12 @@ def route(question: str) -> RouteResult:
         response = make_request(prompt, max_tokens=500, temperature=0.1)
         data = _parse_llm_json(response.content)
 
-        if data and data.get("intent") in ("stat_query", "player_biography", "general_explanation"):
+        if data and data.get("intent") in (
+            "stat_query",
+            "player_biography",
+            "freeform_query",
+            "general_explanation",
+        ):
             return RouteResult(
                 intent=data["intent"],
                 stat=data.get("stat"),
