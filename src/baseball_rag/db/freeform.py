@@ -257,11 +257,13 @@ def format_result(result: FreeformResult, question: str) -> str:
     header = f"{result.columns}"
     lines.append(header)
 
-    # Truncated warning
+    # Always show total row count
     if result.truncated:
-        lines.append(f"(showing first {MAX_ROWS} of many rows -- consider refining your query)")
+        lines.append(f"({result.row_count} rows total, showing first 100)")
+    else:
+        lines.append(f"({result.row_count} rows)")
 
-    for row in result.rows[:20]:  # Only show first 20 in terminal
+    for row in result.rows[:100]:
         lines.append(str(row))
 
     return "\n".join(lines)
