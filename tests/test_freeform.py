@@ -114,6 +114,68 @@ class TestParseIntent:
             _parse_intent('{"team_name_pattern": "Braves"}')
 
 
+class TestDeterminismSmokeSuite:
+    """Smoke tests verifying deterministic output across semantically identical inputs.
+
+    The property under test: equivalent question phrasings must produce identical
+    row counts (same players, same SQL). This is the core guarantee of our
+    intent-decomposition design -- if this fails, model variance has crept back in.
+    """
+
+    def _run_query(self, question: str) -> tuple[int, list[tuple]]:
+        from baseball_rag.db.freeform import query
+
+        conn = __import__(
+            "baseball_rag.db.duckdb_schema",
+            fromlist=["get_duckdb"],
+        ).get_duckdb()
+        result = query(question, conn)
+        return result.row_count, result.rows
+
+    def test_braves_1936_variants(self):
+        """All phrasings of 'Braves 1936' must return identical row counts."""
+        questions = [
+            "Who played for the Braves in 1936?",
+            "Who were the Braves players in 1936?",
+            "What players were on the Atlanta Braves in 1936?",
+            "Braves roster nineteen thirty six",
+        ]
+        results = [self._run_query(q) for q in questions]
+        counts = [r[0] for r in results]
+
+        assert len(set(counts)) == 1, "Non-deterministic row counts across variants: " + ", ".join(
+            f"{q}->{c}" for (q,), c in zip(questions, counts)
+        )
+
+    def test_braves_2022_variants(self):
+        """All phrasings of 'Braves 2022' must return identical row counts."""
+        questions = [
+            "Who played for the Braves in 2022?",
+            "What players were on the Atlanta Braves in 2022?",
+            "Braves roster twenty twenty two",
+        ]
+        results = [self._run_query(q) for q in questions]
+        counts = [r[0] for r in results]
+
+        assert len(set(counts)) == 1, "Non-deterministic row counts across variants: " + ", ".join(
+            f"{q}->{c}" for (q,), c in zip(questions, counts)
+        )
+
+    def test_yankees_1950_variants(self):
+        """All phrasings of 'Yankees 1950' must return identical row counts."""
+        questions = [
+            "Who played for the Yankees in 1950?",
+            "What players were on the New York Yankees in 1950?",
+            "Yankees roster nineteen fifty",
+        ]
+        results = [self._run_query(q) for q in questions]
+        counts = [r[0] for r in results]
+
+        assert len(set(counts)) == 1, "Non-deterministic row counts across variants: " + ", ".join(
+            f"{q}->{c}" for (q,), c in zip(questions, counts)
+        )
+
+
 class TestGenerateSQLDeterminism:
     """Integration-style tests verifying deterministic output for the same inputs."""
 
