@@ -57,6 +57,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         "test_pipeline",
         "test_pipeline_tracing_integration",
         "test_router",
+        "test_router_player_bio",
         "test_router_player_detection",
     }
     slow = {
