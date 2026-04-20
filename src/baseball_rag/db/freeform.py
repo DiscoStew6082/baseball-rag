@@ -2,11 +2,12 @@
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import duckdb
 
 from baseball_rag.db.team_history import get_contextual_hint
+from baseball_rag.generation.llm import make_request
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -99,69 +100,160 @@ def _get_schema_cached(conn: duckdb.DuckDBPyConnection) -> str:
 # SQL Generation
 # ---------------------------------------------------------------------------
 
-_SQL_GENERATION_SYSTEM = (
-    "You are a DuckDB SQL expert. Given the schema below and a user question, "
-    "respond with ONLY valid JSON -- no markdown fences, no explanation.\n"
+# -----------------------------------------------------------------------------
+# Intent parsing -- deterministic by design
+# -----------------------------------------------------------------------------
+
+
+@dataclass
+class QueryIntent:
+    """Structured intent extracted from a natural language question.
+
+    Same intent always produces the same SQL, regardless of LLM version or
+    temperature. The model identifies WHAT data is relevant; _assemble_sql
+    handles HOW to build the query.
+    """
+
+    stat_tables: list[str] = field(default_factory=list)
+    # batting, pitching, fielding -- which stat tables contain the answer
+
+    team_name_pattern: str | None = None
+    # Team nickname to match via teams.name LIKE '%pattern%'
+
+    year_value: int | None = None
+    # Year to filter on (from batting/fielding/pitching.yearID)
+
+    extra_conditions: list[str] = field(default_factory=list)
+    # Arbitrary additional WHERE conditions as raw SQL fragments
+
+
+def _parse_intent(raw: str) -> QueryIntent:
+    """Parse LLM JSON output into a QueryIntent.
+
+    Tries direct parse, then strips markdown fences, then extracts from {...} blocks.
+    Raises ValueError if stat_tables cannot be determined.
+    """
+    import re as _re
+
+    def _from_data(data: dict) -> QueryIntent | None:
+        tables = data.get("stat_tables")
+        if not tables:
+            return None  # signal caller to skip this block
+        return QueryIntent(
+            stat_tables=tables,
+            team_name_pattern=data.get("team_name_pattern"),
+            year_value=data.get("year_value"),
+            extra_conditions=data.get("extra_conditions") or [],
+        )
+
+    candidates = [
+        raw,
+        _re.sub(r"^```[\w]*\s*\n?(.*?)\n?```$", r"\1", raw.strip(), flags=_re.DOTALL),
+    ]
+
+    for candidate in candidates:
+        try:
+            data = json.loads(candidate)
+            result = _from_data(data)
+            if result is not None:
+                return result
+        except json.JSONDecodeError:
+            pass
+
+    # Last resort: extract from {...} blocks
+    for start, end in _extract_json_blocks(raw):
+        try:
+            data = json.loads(raw[start:end])
+            result = _from_data(data)
+            if result is not None:
+                return result
+        except json.JSONDecodeError:
+            continue
+
+    raise ValueError(f"Could not determine stat_tables from LLM response: {raw[:200]}")
+
+
+def _assemble_sql(intent: QueryIntent) -> str:
+    """Build SQL deterministically from a QueryIntent.
+
+    Same intent always produces the same SQL. The model identifies which tables
+    and filters are needed; this function handles join logic, UNIONs, etc.
+    """
+    if not intent.stat_tables:
+        raise ValueError("intent.stat_tables cannot be empty")
+
+    union_parts: list[str] = []
+
+    for tbl in intent.stat_tables:
+        # Base join: people -> stat_table on playerID
+        join_conditions = [f"p.playerID = {tbl}.playerID"]
+
+        if intent.team_name_pattern is not None:
+            from_part = (
+                f"SELECT DISTINCT p.nameFirst, p.nameLast "
+                f"FROM people p "
+                f"JOIN {tbl} ON {' AND '.join(join_conditions)} "
+                f"JOIN teams t ON {tbl}.teamID = t.teamID "
+                f"AND t.name ILIKE '%{intent.team_name_pattern}%'"
+            )
+        else:
+            from_part = (
+                f"SELECT DISTINCT p.nameFirst, p.nameLast "
+                f"FROM people p "
+                f"JOIN {tbl} ON {' AND '.join(join_conditions)}"
+            )
+
+        where_parts: list[str] = []
+        if intent.year_value is not None:
+            where_parts.append(f"{tbl}.yearID = {intent.year_value}")
+
+        for cond in intent.extra_conditions or []:
+            where_parts.append(cond)
+
+        if where_parts:
+            from_part += " WHERE " + " AND ".join(where_parts)
+
+        union_parts.append(from_part)
+
+    # Combine with UNION (deduplicates across stat tables)
+    if len(union_parts) == 1:
+        return union_parts[0]
+    return "\nUNION\n".join(union_parts)
+
+
+# -----------------------------------------------------------------------------
+# SQL Generation
+# -----------------------------------------------------------------------------
+
+_INTENT_SYSTEM = (
+    "You are a query planner. Given the user question, produce ONLY valid JSON "
+    "-- no markdown fences, no explanation.\n"
     "\n"
-    'Output format:\n{"sql": "<complete SQL query>"}\n'
-    "\n"
-    "CRITICAL SCHEMA RULES:\n"
-    "- The 'teams' table has EXACTLY two columns: teamID (VARCHAR), name (VARCHAR). "
-    "It does NOT have yearID, year, or any other time column.\n"
-    "- To filter teams by time period you must JOIN batting/fielding/pitching on teamID "
-    "and filter by yearID from those tables -- NOT from teams.\n"
-    "- The 'batting', 'fielding', and 'pitching' tables each have: "
-    "playerID, yearID, stint, teamID, lgID, ...\n"
-    "- To find who played for a team in a given YEAR, you must:\n"
-    "  1. Find the team's teamID from teams WHERE name LIKE '%TeamNickname%'\n"
-    "  2. JOIN with batting/fielding/pitching ON playerID AND filter by yearID = <that_year>\n"
-    "- The 'people' table has: ID, playerID, birthYear, ..., nameFirst, nameLast, ...\n"
+    "Output format:\n"
+    "{\n"
+    '  "stat_tables": ["batting"],   -- list of: batting, pitching, fielding\n'
+    '  "team_name_pattern": "Braves",  -- team nickname (omit if not about a team)\n'
+    '  "year_value": 1936,           -- year ID filter (omit if no year mentioned)\n'
+    '  "extra_conditions": []         -- optional raw SQL WHERE fragments\n'
+    "}\n"
     "\n"
     "Rules:\n"
-    "- All string literals use single quotes\n"
-    "- DuckDB dialect -- use read_csv_auto-compatible syntax if querying CSVs\n"
-    "- Do NOT include any text outside the JSON object\n"
-    "\n"
-    "Schema:\n"
+    "- stat_tables: which of batting/pitching/fielding contain the answer.\n"
+    "  Use multiple tables only if the question spans roles (e.g. 'who played' "
+    "without specifying pitcher/batter should include both batting AND pitching).\n"
+    "- team_name_pattern: extract the nickname from the question ('Yankees', 'Braves').\n"
+    "- year_value: extract the integer year when a specific year is mentioned.\n"
+    "- Omit any field entirely if it does not apply -- do not guess.\n"
 )
 
 
 def _generate_sql(question: str, schema: str) -> str:
-    import re as _re
+    """Convert question to SQL via intent decomposition (deterministic by design)."""
+    prompt = (_INTENT_SYSTEM + "\n\nSchema:\n" + schema, question)
+    response = make_request(prompt, max_tokens=1000, temperature=0.1)
 
-    from baseball_rag.generation.llm import make_request
-
-    prompt = (_SQL_GENERATION_SYSTEM + schema, question)
-    response = make_request(prompt, max_tokens=2000, temperature=0.1)
-
-    raw = response.content.strip()
-
-    # Try direct JSON parse first
-    try:
-        data = json.loads(raw)
-        return data["sql"]
-    except json.JSONDecodeError:
-        pass
-
-    # Strip markdown code fences (```json ... ``` or ```sql ... ```)
-    raw = _re.sub(r"^```(?:json|sql)?\s*\n?(.*?)\n?```$", r"\1", raw, flags=_re.DOTALL).strip()
-
-    try:
-        data = json.loads(raw)
-        return data["sql"]
-    except json.JSONDecodeError:
-        pass
-
-    # Last resort: extract from {...} block containing "sql"
-    for start, end in _extract_json_blocks(raw):
-        try:
-            data = json.loads(raw[start:end])
-            if "sql" in data:
-                return data["sql"]
-        except json.JSONDecodeError:
-            continue
-
-    raise ValueError(f"Could not parse SQL from LLM response: {raw[:500]}")
+    intent = _parse_intent(response.content.strip())
+    return _assemble_sql(intent)
 
 
 def _extract_json_blocks(text: str) -> list[tuple[int, int]]:
