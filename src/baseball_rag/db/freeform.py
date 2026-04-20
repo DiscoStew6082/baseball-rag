@@ -1,10 +1,12 @@
-"""Natural language → SQL query execution with safety guardrails."""
+"""Natural language -> SQL query execution with safety guardrails."""
 
 import json
 import re
 from dataclasses import dataclass
 
 import duckdb
+
+from baseball_rag.db.team_history import get_contextual_hint
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -25,7 +27,12 @@ class FreeformResult:
     truncated: bool  # True if results exceeded MAX_ROWS
 
 
-def query(question: str, conn: duckdb.DuckDBPyConnection) -> FreeformResult:
+def query(
+    question: str,
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    year: int | None = None,
+) -> FreeformResult:
     """Convert a natural language question to SQL and execute it.
 
     Safeguards applied:
@@ -41,14 +48,18 @@ def query(question: str, conn: duckdb.DuckDBPyConnection) -> FreeformResult:
     # 1. Get schema description (cached, ~200ms first call)
     schema = _get_schema_cached(conn)
 
-    # 2. Generate SQL via LLM
-    raw_sql = _generate_sql(question, schema)
+    # 2. Inject historical context for team nicknames based on the query year
+    hint = get_contextual_hint(question, year)
+    enriched_question = f"{question} {hint}".strip() if hint else question
+
+    # 3. Generate SQL via LLM
+    raw_sql = _generate_sql(enriched_question, schema)
     sql = raw_sql.strip().rstrip(";")
 
-    # 3. Validate against schema (table/column names exist)
+    # 4. Validate against schema (table/column names exist)
     _validate_sql(sql, conn)
 
-    # 4. Execute with timeout + row limit enforcement
+    # 5. Execute with timeout + row limit enforcement
     result = _execute_safe(sql, conn)
 
     return result
@@ -88,45 +99,61 @@ def _get_schema_cached(conn: duckdb.DuckDBPyConnection) -> str:
 # SQL Generation
 # ---------------------------------------------------------------------------
 
-_SQL_GENERATION_PROMPT = """You are a DuckDB SQL expert. Given the schema below and a user question,
-output ONLY valid JSON with a single key "sql" containing the complete SQL query.
-
-Rules:
-- Output ONLY: {{"sql": "<your sql>"}}
-- No markdown, no explanation, no trailing text
-- All string literals use single quotes
-- DuckDB dialect — use read_csv_auto-compatible syntax if querying CSVs
-
-Schema:
-{schema}
-
-Question: {question}
-"""
+_SQL_GENERATION_SYSTEM = (
+    "You are a DuckDB SQL expert. Given the schema below and a user question, "
+    "respond with ONLY valid JSON -- no markdown fences, no explanation.\n"
+    "\n"
+    'Output format:\n{"sql": "<complete SQL query>"}\n'
+    "\n"
+    "Rules:\n"
+    "- All string literals use single quotes\n"
+    "- DuckDB dialect -- use read_csv_auto-compatible syntax if querying CSVs\n"
+    "- Do NOT include any text outside the JSON object\n"
+    "\n"
+    "Schema:\n"
+)
 
 
 def _generate_sql(question: str, schema: str) -> str:
-    from baseball_rag.generation.llm import make_request  # local LLM call
+    import re as _re
 
-    prompt = _SQL_GENERATION_PROMPT.format(schema=schema, question=question)
-    response = make_request(prompt, max_tokens=500, temperature=0.1)
+    from baseball_rag.generation.llm import make_request
+
+    prompt = (_SQL_GENERATION_SYSTEM + schema, question)
+    response = make_request(prompt, max_tokens=2000, temperature=0.1)
+
+    raw = response.content.strip()
+
+    # Try direct JSON parse first
+    try:
+        data = json.loads(raw)
+        return data["sql"]
+    except json.JSONDecodeError:
+        pass
+
+    # Strip markdown code fences (```json ... ``` or ```sql ... ```)
+    raw = _re.sub(r"^```(?:json|sql)?\s*\n?(.*?)\n?```$", r"\1", raw, flags=_re.DOTALL).strip()
 
     try:
-        data = json.loads(response.content.strip())
+        data = json.loads(raw)
         return data["sql"]
-    except (json.JSONDecodeError, KeyError):
-        # Try extracting {...} block
-        for start, end in _extract_json_blocks(response.content):
-            try:
-                data = json.loads(response.content[start:end])
-                if "sql" in data:
-                    return data["sql"]
-            except json.JSONDecodeError:
-                continue
-        raise ValueError(f"Could not parse SQL from LLM response: {response.content[:200]}")
+    except json.JSONDecodeError:
+        pass
+
+    # Last resort: extract from {...} block containing "sql"
+    for start, end in _extract_json_blocks(raw):
+        try:
+            data = json.loads(raw[start:end])
+            if "sql" in data:
+                return data["sql"]
+        except json.JSONDecodeError:
+            continue
+
+    raise ValueError(f"Could not parse SQL from LLM response: {raw[:500]}")
 
 
 def _extract_json_blocks(text: str) -> list[tuple[int, int]]:
-    """Find all candidate JSON objects in text (start brace → balanced end brace).
+    """Find all candidate JSON objects in text (start brace -> balanced end brace).
 
     Returns list of (start, end+1) byte positions for each {...} block found.
     """
@@ -155,9 +182,16 @@ def _validate_sql(sql: str, conn: duckdb.DuckDBPyConnection) -> None:
     # SHOW ALL TABLES returns (database, schema, name, column_names, ...)
     tables = {row[2] for row in conn.execute("SHOW ALL TABLES").fetchall()}
 
-    # Find TABLE references (simple regex — good enough for structured queries)
-    referenced_tables = set(re.findall(r"\bFROM\s+(\w+)\b", sql, re.IGNORECASE))
-    referenced_tables |= set(re.findall(r"\bJOIN\s+(\w+)\b", sql, re.IGNORECASE))
+    # Find TABLE references -- be strict so we don't accidentally capture keywords
+    # like BETWEEN, INNER, etc. that sometimes appear on the same line as FROM
+    referenced_tables: set[str] = set()
+    # Sort by length descending so "INNER JOIN" matches before bare "JOIN"
+    for keyword in sorted(
+        ("FROM", "JOIN", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "CROSS JOIN"),
+        key=len,
+        reverse=True,
+    ):
+        referenced_tables |= set(re.findall(rf"\b{keyword}\s+(\w+)\b", sql, re.IGNORECASE))
 
     for tbl in referenced_tables:
         if tbl.lower() not in {t.lower() for t in tables}:
@@ -171,10 +205,10 @@ def _validate_sql(sql: str, conn: duckdb.DuckDBPyConnection) -> None:
 
 def _execute_safe(sql: str, conn: duckdb.DuckDBPyConnection) -> FreeformResult:
     """Execute with timeout and row limit guardrails."""
-    # Set DuckDB query timeout (best effort — not all DuckDB versions support this)
+    # Set DuckDB query timeout (best effort -- not all DuckDB versions support this)
     try:
         conn.execute(f"SET statement_timeout = '{SCHEMA_TIMEOUT_MS}ms'")
-    except Exception:  # noqa: BLE001 — duckdb CatalogException not always importable
+    except Exception:  # noqa: BLE001 -- duckdb CatalogException not always importable
         pass
 
     # Append row limit if not already present
@@ -213,7 +247,7 @@ def format_result(result: FreeformResult, question: str) -> str:
 
     # Truncated warning
     if result.truncated:
-        lines.append(f"(showing first {MAX_ROWS} of many rows — consider refining your query)")
+        lines.append(f"(showing first {MAX_ROWS} of many rows -- consider refining your query)")
 
     for row in result.rows[:20]:  # Only show first 20 in terminal
         lines.append(str(row))
