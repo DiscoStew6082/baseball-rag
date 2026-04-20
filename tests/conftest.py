@@ -51,6 +51,8 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     integration = {
         "test_api",
         "test_chroma_store",
+        "test_cli_player_query",
+        "test_dashboard",
         "test_diagram_ui",
         "test_generation",
         "test_gradio",
