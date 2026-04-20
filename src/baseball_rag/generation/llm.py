@@ -61,22 +61,45 @@ def _post(base_url: str, payload: dict, timeout: int = 120) -> requests.Response
 def _strip_reasoning_block(text: str) -> str:
     """Strip Gemma 4's internal planning/scaffolding block and markdown fences.
 
-    Gemma 4 sometimes prepends a structured reasoning section (lines starting with
-    ``*``, ``-``, or backtick) and/or wraps output in ```sql/```json fences.
+    Gemma 4 produces thinking content in one of these formats depending on the backend:
+      - <|channel>thought\\n...\\n<|channel|>   (vLLM / LM Studio default)
+      - <|think|>...<|think|>                 (Ollama / some configs)
+
     This strips both so the caller gets clean content.
     """
+    original = text
+
     # Remove surrounding markdown code fences first (e.g. ```sql ... ```)
     fence_match = re.match(r"^```[\w]*\s*\n?(.*?)\n?```$", text.strip(), re.DOTALL)
     if fence_match:
-        return fence_match.group(1).strip()
+        return _strip_reasoning_block(fence_match.group(1).strip())
+
+    # Strip <|channel>thought\n...\n<|channel|> blocks (vLLM / LM Studio)
+    channel_match = re.search(
+        r"<\|channel\>thought\s*\n.*?\n<\|channel\|>",
+        text,
+        re.DOTALL,
+    )
+    if channel_match:
+        text = text.replace(channel_match.group(0), "").strip()
+
+    # Strip <|think|>...<|think|> blocks (Ollama / other backends)
+    think_match = re.search(
+        r"<\|think\>\s*\n?.*?\n?<\|think\|>",
+        text,
+        re.DOTALL,
+    )
+    if think_match:
+        text = text.replace(think_match.group(0), "").strip()
 
     # Strip leading reasoning block: lines starting with list markers
+    # (fallback for any remaining structured prefix)
     lines = text.split("\n")
     for i, line in enumerate(lines):
         stripped = line.strip()
         if not (stripped.startswith("*") or stripped.startswith("-") or stripped.startswith("`")):
             return "\n".join(lines[i:])
-    return text
+    return original
 
 
 @traced(component_id="llm", label="Generate Answer")

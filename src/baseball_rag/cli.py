@@ -5,7 +5,7 @@ import sys
 
 from baseball_rag.db import get_career_stat_leaders, get_player_stat, get_stat_leaders, init_db
 from baseball_rag.db.duckdb_schema import get_duckdb
-from baseball_rag.generation.prompt import build_explanation_prompt
+from baseball_rag.generation.prompt import build_explanation_prompt, build_open_prompt
 from baseball_rag.retrieval.chroma_store import retrieve
 from baseball_rag.routing import route
 
@@ -90,7 +90,7 @@ def answer(question: str) -> str:
         try:
             from baseball_rag.generation.llm import make_request
 
-            response = make_request(prompt)
+            response = make_request(prompt, max_tokens=1500)
             return response.content
         except ConnectionError:
             # LM Studio not running — fall back to showing retrieved docs
@@ -150,6 +150,16 @@ def answer(question: str) -> str:
                     "Run: uv run python -m baseball_rag.corpus.ingest"
                 )
 
+            # Try LLM without retrieved context — it may know this from training
+            try:
+                from baseball_rag.generation.llm import make_request
+
+                prompt = build_open_prompt(decision.raw_question)
+                response = make_request(prompt, max_tokens=1500)
+                return response.content
+            except ConnectionError:
+                pass  # LM Studio not running; fall through to return the "no docs" message
+
             lines.extend(
                 [
                     "",
@@ -165,7 +175,7 @@ def answer(question: str) -> str:
         try:
             from baseball_rag.generation.llm import make_request
 
-            response = make_request(prompt)
+            response = make_request(prompt, max_tokens=1500)
             return response.content
         except ConnectionError:
             # LM Studio not running — fall back to showing retrieved docs

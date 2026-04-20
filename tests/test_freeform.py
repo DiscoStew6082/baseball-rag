@@ -132,6 +132,7 @@ class TestDeterminismSmokeSuite:
         result = query(question, conn)
         return result.row_count, result.rows
 
+    @pytest.mark.llm
     def test_braves_1936_variants(self):
         """All phrasings of 'Braves 1936' must return identical row counts."""
         questions = [
@@ -147,6 +148,7 @@ class TestDeterminismSmokeSuite:
             f"{q}->{c}" for (q,), c in zip(questions, counts)
         )
 
+    @pytest.mark.llm
     def test_braves_2022_variants(self):
         """All phrasings of 'Braves 2022' must return identical row counts."""
         questions = [
@@ -161,6 +163,7 @@ class TestDeterminismSmokeSuite:
             f"{q}->{c}" for (q,), c in zip(questions, counts)
         )
 
+    @pytest.mark.llm
     def test_yankees_1950_variants(self):
         """All phrasings of 'Yankees 1950' must return identical row counts."""
         questions = [

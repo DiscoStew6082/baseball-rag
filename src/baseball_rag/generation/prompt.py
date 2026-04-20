@@ -48,3 +48,20 @@ def build_player_bio_prompt(question: str, context_docs: list) -> tuple[str, str
     return _BASE_ANSWER_TEMPLATE.render()[0], _BASE_ANSWER_TEMPLATE.user.format(
         context=ctx, question=question
     )
+
+
+def build_open_prompt(question: str) -> tuple[str, str]:
+    """Render a prompt with NO retrieved context — LLM answers from its own knowledge.
+
+    Use when the corpus returned no relevant documents.
+    The LLM should answer directly and honestly note if stats/data are involved.
+    """
+    return (
+        "You are a knowledgeable baseball historian. Answer the question directly "
+        "using your own knowledge.\n"
+        "Do not include planning notes, internal monologue, or any structured reasoning markup "
+        "(no lines starting with *, -, or bullet points) in your response.\n"
+        "If the question asks for specific statistics or data from a database, "
+        "say you don't have access to that information.",
+        f"Question: {question}",
+    )

@@ -1,6 +1,7 @@
 """Persistent vector store backed by ChromaDB."""
 
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 import chromadb
@@ -10,6 +11,7 @@ from baseball_rag import embedder as _embedder
 from baseball_rag.arch.tracing import traced
 
 COLLECTION_NAME = "baseball_corpus"
+RELEVANCE_THRESHOLD = 0.7
 
 
 @chromadb.api.collection_configuration.register_embedding_function
@@ -58,13 +60,23 @@ def _resolve_persist_dir(persist_dir: Path | None) -> Path:
     return DATA_DIR
 
 
-def get_store(persist_dir: Path) -> chromadb.Collection:
-    """Open or create the baseball corpus collection."""
-    client = chromadb.PersistentClient(path=str(persist_dir))
+@lru_cache(maxsize=1)
+def _cached_collection(persist_dir: str) -> chromadb.Collection:
+    """Cached collection — keyed by path string to prevent duplicate clients."""
+    client = chromadb.PersistentClient(path=persist_dir)
     return client.get_or_create_collection(
         name=COLLECTION_NAME,
         embedding_function=LMStudioEmbeddingFunction(),  # type: ignore[arg-type]
     )
+
+
+def get_store(persist_dir: Path) -> chromadb.Collection:
+    """Open or create the baseball corpus collection.
+
+    Returns a cached singleton per path to avoid ChromaDB creating multiple
+    clients for the same location (which causes empty ephemeral collections).
+    """
+    return _cached_collection(str(persist_dir.resolve()))
 
 
 def _retrieve_impl(
@@ -100,6 +112,11 @@ def _retrieve_impl(
                 score=score,
             )
         )
+
+    # Reject low-scoring retrievals — scores ~0.49 in high-dimensional space are
+    # essentially random; fall back to LLM without retrieved context instead.
+    if chunks and chunks[0].score < RELEVANCE_THRESHOLD:
+        return []
 
     return chunks
 

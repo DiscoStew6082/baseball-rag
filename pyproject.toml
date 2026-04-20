@@ -44,6 +44,7 @@ markers = [
     "unit: fast, mocked tests — no external services required",
     "integration: requires live services (ChromaDB, LM Studio, Gradio, etc.)",
     "slow: long-running or heavy setup (full pipeline runs, ingestion)",
+    "llm: calls the LLM via LM Studio — excluded from unit CI job",
 ]
 
 [tool.coverage.run]

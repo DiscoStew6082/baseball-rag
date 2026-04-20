@@ -1,8 +1,11 @@
 """Tests for ChromaDB vector store."""
 
+import tempfile
+from pathlib import Path
+
 import pytest
 
-from baseball_rag.retrieval.chroma_store import get_store, retrieve
+from baseball_rag.retrieval.chroma_store import LMStudioEmbeddingFunction, get_store, retrieve
 
 
 @pytest.fixture
@@ -54,6 +57,92 @@ class TestChromaStore:
         results = retrieve("home run records", top_k=5, persist_dir=chroma_db_dir)
         for i in range(len(results) - 1):
             assert results[i].score >= results[i + 1].score
+
+    def test_get_store_idempotent_same_path(self, chroma_db_dir):
+        """Calling get_store() twice with the same path returns the same collection object."""
+        from baseball_rag.retrieval.chroma_store import get_store
+
+        col_a = get_store(chroma_db_dir)
+        col_b = get_store(chroma_db_dir)
+        # Same name and (for PersistentClient) same persistent location → should be identical
+        assert col_a.name == col_b.name
+        assert col_a is col_b
+
+
+class TestRelevanceThreshold:
+    """Tests for relevance threshold — low-scoring retrievals should return empty."""
+
+    @pytest.mark.unit
+    def test_low_score_results_filtered_out(self, monkeypatch):
+        """When top result scores below threshold, _retrieve_impl returns [] instead of junk."""
+        import numpy as np
+
+        from baseball_rag.retrieval.chroma_store import _retrieve_impl
+
+        # Mock embedder to return random vectors so no query matches corpus docs
+        def fake_embed(text):
+            return np.random.randn(3840).tolist()
+
+        monkeypatch.setattr("baseball_rag.embedder.embed", fake_embed)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            chroma_path = Path(tmp) / "chroma"
+            import chromadb
+
+            client = chromadb.PersistentClient(path=str(chroma_path))
+            try:
+                client.delete_collection("baseball_corpus")
+            except Exception:
+                pass
+            collection = client.create_collection(
+                name="baseball_corpus",
+                embedding_function=LMStudioEmbeddingFunction(),
+            )
+
+            from baseball_rag.corpus import get_hof_bios, get_stat_defs
+            from baseball_rag.corpus.frontmatter import parse_frontmatter
+
+            for path in [*get_stat_defs(), *get_hof_bios()]:
+                result = parse_frontmatter(path.read_text())
+                text = f"{result['metadata']['title']}\n\n{result['body'].strip()}"
+                collection.add(
+                    documents=[text],
+                    ids=[path.stem],
+                    metadatas=[
+                        {
+                            "source": str(path.name),
+                            "category": result["metadata"].get("category", ""),
+                            "title": result["metadata"].get("title", ""),
+                        }
+                    ],
+                )
+
+            # Query unlikely to match anything — forces near-random scores
+            results = _retrieve_impl(
+                "xyzzy PLUGH frobnicator quantum baseball",
+                top_k=3,
+                persist_dir=chroma_path,
+            )
+        assert results == []
+
+    @pytest.mark.unit
+    def test_scores_within_valid_range(self, monkeypatch):
+        """Every returned chunk has a score between 0 and 1."""
+        import numpy as np
+
+        from baseball_rag.retrieval.chroma_store import _retrieve_impl
+
+        # Mock embedder with deterministic output so test is stable
+        rng = np.random.default_rng(42)
+
+        def fake_embed(text):
+            return rng.standard_normal(3840).tolist()
+
+        monkeypatch.setattr("baseball_rag.embedder.embed", fake_embed)
+
+        results = _retrieve_impl("home run", top_k=3, persist_dir=None)
+        for chunk in results:
+            assert 0.0 <= chunk.score <= 1.0
 
 
 class TestChromaPersistDir:
