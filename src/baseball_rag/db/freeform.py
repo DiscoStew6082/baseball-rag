@@ -53,14 +53,13 @@ def query(
     hint = get_contextual_hint(question, year)
     enriched_question = f"{question} {hint}".strip() if hint else question
 
-    # 3. Generate SQL via LLM
-    raw_sql = _generate_sql(enriched_question, schema)
-    sql = raw_sql.strip().rstrip(";")
+    # 3. Generate SQL via structured intent extraction — Python assembles all SQL
+    sql = _generate_sql(enriched_question, schema).strip().rstrip(";")
 
-    # 4. Validate against schema (table/column names exist)
+    # Validate table/column references before executing
     _validate_sql(sql, conn)
 
-    # 5. Execute with timeout + row limit enforcement
+    # 4. Execute with timeout + row limit enforcement
     result = _execute_safe(sql, conn)
 
     return result
@@ -91,6 +90,13 @@ def _get_schema_cached(conn: duckdb.DuckDBPyConnection) -> str:
             # cursor.description gives column names for the last query
             desc = conn.description
             lines.append(f"  Sample row: {dict(zip([d[0] for d in desc], sample[0]))}")
+
+    # Always append derived-stat guidance so the LLM never invents columns like BA, AVG
+    lines.append(
+        "\nComputed / derived stats (do NOT assume these exist as columns):\n"
+        "  batting: AVG = CAST(H AS DOUBLE) / NULLIF(AB, 0)\n"
+        "  pitching: ERA is pre-computed and exists as a column\n"
+    )
 
     _cached_schema = "\n".join(lines)
     return _cached_schema
@@ -123,8 +129,13 @@ class QueryIntent:
     year_value: int | None = None
     # Year to filter on (from batting/fielding/pitching.yearID)
 
-    extra_conditions: list[str] = field(default_factory=list)
-    # Arbitrary additional WHERE conditions as raw SQL fragments
+    leader_stats: list[str] = field(default_factory=list)
+    # Stats to find league-wide leaders for (e.g. ["HR", "RBI"]).
+    # When non-empty, _assemble_sql builds correlated MAX() subqueries
+    # across ALL teams — no teamID filter in the subquery.
+
+
+_VALID_STAT_TABLES: frozenset[str] = frozenset({"batting", "pitching", "fielding"})
 
 
 def _parse_intent(raw: str) -> QueryIntent:
@@ -137,13 +148,31 @@ def _parse_intent(raw: str) -> QueryIntent:
 
     def _from_data(data: dict) -> QueryIntent | None:
         tables = data.get("stat_tables")
-        if not tables:
-            return None  # signal caller to skip this block
+        if not tables or any(t.lower() not in _VALID_STAT_TABLES for t in tables):
+            return None  # signal caller to try next block
         return QueryIntent(
-            stat_tables=tables,
+            stat_tables=[t.lower() for t in tables],
             team_name_pattern=data.get("team_name_pattern"),
             year_value=data.get("year_value"),
-            extra_conditions=data.get("extra_conditions") or [],
+            leader_stats=[
+                s.upper()
+                for s in (data.get("leader_stats") or [])
+                if s.upper() in _COMPUTED_STATS
+                or s.upper()
+                in {
+                    "HR",
+                    "RBI",
+                    "W",
+                    "L",
+                    "G",
+                    "GS",
+                    "SV",
+                    "SO",
+                    "BB",
+                    "ERA",
+                    "AVG",
+                }
+            ],
         )
 
     candidates = [
@@ -173,11 +202,40 @@ def _parse_intent(raw: str) -> QueryIntent:
     raise ValueError(f"Could not determine stat_tables from LLM response: {raw[:200]}")
 
 
+_AVG_COLS = {"H", "AB"}  # columns needed to compute batting average
+
+# Stats that must be computed inline (not stored as pre-existing columns)
+_COMPUTED_STATS: set[str] = {"AVG"}
+
+
+def _leader_condition(tbl: str, stat: str) -> str:
+    """Return the WHERE clause fragment for a league-wide leader condition.
+
+    For regular stats (HR, RBI):  tbl.stat = (SELECT MAX(stat) FROM ... WHERE yearID matches)
+    For AVG:                     computed formula = (SELECT MAX(computed) FROM ...)
+    Subquery never filters by teamID — it finds the max across ALL teams in that year.
+    """
+    if stat.upper() == "AVG":
+        # batting average = H / AB, with guard against div-by-zero
+        outer = f"CAST({tbl}.H AS DOUBLE) / NULLIF({tbl}.AB, 0)"
+        inner = (
+            f"SELECT MAX(CAST(H AS DOUBLE) / NULLIF(AB, 0)) FROM {tbl} b2 "
+            f"WHERE b2.yearID = {tbl}.yearID AND b2.AB > 100"
+        )
+    else:
+        outer = f"{tbl}.{stat}"
+        # Use COALESCE to handle years where no one has a value in this stat
+        inner = f"SELECT MAX({stat}) FROM {tbl} b2 WHERE b2.yearID = {tbl}.yearID"
+
+    return f"{outer} = ({inner})"
+
+
 def _assemble_sql(intent: QueryIntent) -> str:
     """Build SQL deterministically from a QueryIntent.
 
-    Same intent always produces the same SQL. The model identifies which tables
-    and filters are needed; this function handles join logic, UNIONs, etc.
+    Same intent always produces the same SQL, regardless of LLM version or
+    temperature. The model identifies which tables and leader stats are needed;
+    this function handles join logic, correlated subqueries, etc.
     """
     if not intent.stat_tables:
         raise ValueError("intent.stat_tables cannot be empty")
@@ -207,8 +265,9 @@ def _assemble_sql(intent: QueryIntent) -> str:
         if intent.year_value is not None:
             where_parts.append(f"{tbl}.yearID = {intent.year_value}")
 
-        for cond in intent.extra_conditions or []:
-            where_parts.append(cond)
+        # Build leader conditions deterministically — no raw SQL from LLM
+        for stat in intent.leader_stats:
+            where_parts.append(_leader_condition(tbl, stat))
 
         if where_parts:
             from_part += " WHERE " + " AND ".join(where_parts)
@@ -234,25 +293,44 @@ _INTENT_SYSTEM = (
     '  "stat_tables": ["batting"],   -- list of: batting, pitching, fielding\n'
     '  "team_name_pattern": "Braves",  -- team nickname (omit if not about a team)\n'
     '  "year_value": 1936,           -- year ID filter (omit if no year mentioned)\n'
-    '  "extra_conditions": []         -- optional raw SQL WHERE fragments\n'
+    '  "leader_stats": ["HR", "RBI"]  -- stats to find league-wide leaders for\n'
     "}\n"
     "\n"
     "Rules:\n"
-    "- stat_tables: which of batting/pitching/fielding contain the answer.\n"
-    "  Use multiple tables only if the question spans roles (e.g. 'who played' "
-    "without specifying pitcher/batter should include both batting AND pitching).\n"
-    "- team_name_pattern: extract the nickname from the question ('Yankees', 'Braves').\n"
-    "- year_value: extract the integer year when a specific year is mentioned.\n"
+    "- stat_tables: include ONLY the tables actually needed. "
+    'Batting-only questions (HRs, RBIs, AVG) use ["batting"] only; '
+    'pitching-only (wins, ERA) use ["pitching"] only.\n'
+    "- team_name_pattern: extract nickname from question ('Yankees', 'Braves').\n"
+    "- year_value: integer year when a specific year is mentioned.\n"
+    '- leader_stats: stats to find league-wide leaders for — e.g. ["HR","RBI","AVG"] '
+    "for Triple Crown. Use canonical names (HR, RBI, AVG, ERA, W, etc.).\n"
     "- Omit any field entirely if it does not apply -- do not guess.\n"
 )
 
 
 def _generate_sql(question: str, schema: str) -> str:
-    """Convert question to SQL via intent decomposition (deterministic by design)."""
-    prompt = (_INTENT_SYSTEM + "\n\nSchema:\n" + schema, question)
+    """Convert question to SQL via structured intent extraction.
+
+    The LLM provides JSON with stat_tables + leader_stats; Python builds
+    all SQL deterministically — no raw SQL from the model.
+    """
+    prompt = _INTENT_SYSTEM + "\n\nSchema:\n" + schema, question
     response = make_request(prompt, max_tokens=1000, temperature=0.1)
 
-    intent = _parse_intent(response.content.strip())
+    try:
+        intent = _parse_intent(response.content.strip())
+    except ValueError:
+        # Retry once with explicit warning about valid tables and the error cause
+        retry_prompt = (
+            _INTENT_SYSTEM
+            + "\n\nCRITICAL: Only use stat_tables values from {'batting', 'pitching', 'fielding'}. "
+            + "Do NOT use 'people'. Schema:\n"
+            + schema,
+            question,
+        )
+        response = make_request(retry_prompt, max_tokens=1000, temperature=0.1)
+        intent = _parse_intent(response.content.strip())
+
     return _assemble_sql(intent)
 
 
@@ -284,7 +362,7 @@ def _extract_json_blocks(text: str) -> list[tuple[int, int]]:
 def _validate_sql(sql: str, conn: duckdb.DuckDBPyConnection) -> None:
     """Check all table/column references in sql exist in the schema."""
     # SHOW ALL TABLES returns (database, schema, name, column_names, ...)
-    tables = {row[2] for row in conn.execute("SHOW ALL TABLES").fetchall()}
+    tables = {row[2]: row[3] for row in conn.execute("SHOW ALL TABLES").fetchall()}
 
     # Find TABLE references -- be strict so we don't accidentally capture keywords
     # like BETWEEN, INNER, etc. that sometimes appear on the same line as FROM
@@ -300,6 +378,23 @@ def _validate_sql(sql: str, conn: duckdb.DuckDBPyConnection) -> None:
     for tbl in referenced_tables:
         if tbl.lower() not in {t.lower() for t in tables}:
             raise ValueError(f"Unknown table '{tbl}' in generated SQL")
+
+    # Validate that all aliased column references (tbl.col) actually exist.
+    # We check against a union of all columns across all tables, because SQL
+    # uses table-name aliases (p.people_col, t.team_col) and the validation
+    # doesn't need to know which alias maps to which real table — only that
+    # every referenced column is valid in *some* registered table.
+    all_valid_cols: set[str] = set()
+    for _tbl_name, cols in tables.items():
+        all_valid_cols.update(c.lower() for c in cols)
+    all_valid_cols.add("avg")  # allow computed AVG alias
+
+    col_refs = re.findall(r"\b(\w+)\.(\w+)\b", sql, re.IGNORECASE)
+    for _tbl_alias, col in col_refs:
+        if col.lower() not in all_valid_cols:
+            raise ValueError(
+                f"Unknown column '{col}'. Valid columns: {', '.join(sorted(all_valid_cols))}"
+            )
 
 
 # ---------------------------------------------------------------------------

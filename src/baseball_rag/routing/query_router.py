@@ -141,9 +141,12 @@ _ROUTING_PROMPT = (
     "league-wide leaders; 'player_biography' if asking about a player's "
     "career history, teams, biographical info (e.g., 'who was Wally Pipp', "
     "'what teams did he play for', 'tell me about this player'); "
-    "'freeform_query' if the question requires querying the database with "
-    "arbitrary filters or conditions not covered by stat_query; "
-    "'general_explanation' only when none of the above apply\n"
+    "'freeform_query' if the question requires data from the database — "
+    "including award winners, historical achievements, records, career "
+    "leaders across multiple stats or seasons (e.g., 'who won the Triple Crown', "
+    "'list all MVP winners in the 1970s', 'who has the most HRs ever'); "
+    "'general_explanation' only for questions about baseball rules, terminology, "
+    "or concepts that do not require querying player statistics\n"
     "- stat: the canonical stat name if detectable (RBI, HR, AVG, ERA, WHIP, SO, SB, 2B,"
     " 3B, W, L, PO, etc.); null otherwise\n"
     "- time_period: a time filter object with 'type' and 'value'. Types:\n"
@@ -189,6 +192,9 @@ _ROUTING_PROMPT = (
     '{{"intent":"freeform_query","stat":null,"time_period":{{"type":"single","value":1936}},'
     '"position":null,"player_name":null}}\n'
     '- "list all pitchers with over 300 wins" → '
+    '{{"intent":"freeform_query","stat":null,"time_period":null,'
+    '"position":null,"player_name":null}}\n'
+    '- "who won the Triple Crown and which years" → '
     '{{"intent":"freeform_query","stat":null,"time_period":null,'
     '"position":null,"player_name":null}}\n'
     "\nQuestion: {question}"
