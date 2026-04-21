@@ -1,9 +1,104 @@
-"""Query routing - classify user intent and extract structured arguments via LLM."""
+"""Query routing - classify user intent and extract structured arguments via LLM.
+
+Architecture
+============
+The router uses an LLM to classify user queries into one of four intents, then
+extracts structured parameters from the natural language. The extracted fields
+are deliberately rich — particularly the time_period field, which replaces a
+simple "year: int | None" with a discriminated union covering:
+
+  - single   : a specific year          → {"type": "single",    "value": 1972}
+  - decade   : a named decade           → {"type": "decade",     "value": 70}   # 1970-1979
+  - range    : an explicit year span    → {"type": "range",      "value": [1960, 1980]}
+  - relative : last/next/past + unit →
+      {"type": "relative", "value": {"direction": "past", "unit": "year", "count": 2}}
+
+This matters because natural language time expressions are compositional and
+ambiguous. A scalar year field can't capture "seventies" or "between 1960-80"
+without an ever-growing list of special-case fields (decade, start_year,
+end_year...). A discriminated union keeps the schema fixed as new time types
+are added — just a new "type" variant and one handler in the dispatch.
+
+The routing prompt teaches the LLM these types through examples. If a query
+doesn't match any type the LLM is unsure, it returns null for time_period,
+and the CLI falls back to career-level results (no time filter).
+"""
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any
 
 from baseball_rag.arch.tracing import traced
+
+
+class TimePeriodType(str, Enum):
+    """Discriminated union tag for time period extraction.
+
+    Each variant represents a structurally distinct way users express time:
+      single    - A specific year: "1972", "last year" (resolved to an integer)
+      decade    - A named decade: "seventies", "the 1980s"
+      range     - An explicit span: "1960-1980", "from 1990 to 2000"
+      relative  - Relative offset: "past 5 years", "next 3 seasons"
+
+    Using an Enum (rather than a bare str) enforces exhaustive matching in
+    downstream dispatch logic — adding a new variant forces all `match`
+    statements to handle it or raise a compile/runtime error.
+    """
+
+    SINGLE = "single"
+    DECADE = "decade"
+    RANGE = "range"
+    RELATIVE = "relative"
+
+
+@dataclass
+class TimePeriod:
+    """Extracted time filter from a natural language query.
+
+    Attributes
+    ----------
+    type : TimePeriodType
+        Discriminant that determines which field holds the actual value.
+    value : int | list[int] | dict
+        The payload — interpretation depends on ``type``:
+
+        - single    → int year (e.g. 1972)
+        - decade    → int decade number, 0-99 (e.g. 70 for 1970s)
+        - range     → [start_year, end_year] list of two ints
+        - relative  → {"direction": "past"|"future", "unit": str, "count": int}
+                      e.g. {"direction": "past", "unit": "year", "count": 5} for
+                      "past 5 years".  Unit may be "year", "season", "decade".
+
+    resolved_start : int | None
+        After resolution: the concrete start year. Populated by cli.py when
+        handling the route, not extracted from the LLM directly (the LLM only
+        provides ``value``). This avoids forcing the model to do calendar math.
+
+    resolved_end : int | None
+        After resolution: the concrete end year (inclusive).
+
+    Examples
+    --------
+    >>> tp = TimePeriod(type=TimePeriodType.DECADE, value=70)
+    >>> tp.resolved_start, tp.resolved_end
+    (None, None)          # not yet resolved — cli.py fills these
+
+    A fully-resolved range:
+    >>> tp = TimePeriod(
+    ...     type=TimePeriodType.RANGE,
+    ...     value=[1960, 1980],
+    ...     resolved_start=1960,
+    ...     resolved_end=1980
+    ... )
+    """
+
+    type: TimePeriodType = TimePeriodType.SINGLE
+    # int | list[int] | dict — typed more precisely via discriminated union below
+    value: int | list[int] | dict = field(default_factory=lambda: 0)
+    # Concrete years filled in by cli.py after extraction
+    resolved_start: int | None = None
+    resolved_end: int | None = None
 
 
 @dataclass
@@ -12,10 +107,30 @@ class RouteResult:
 
     intent: str  # "stat_query" | "player_biography" | "freeform_query" | "general_explanation"
     stat: str | None  # e.g., "RBI", "HR"
-    year: int | None  # e.g., 1962
-    position: str | None  # e.g., "OF", "CF"
+    time_period: TimePeriod | None = None  # extracted time filter (replaces old year field)
+    position: str | None = None  # e.g., "OF", "CF"
     player_name: str | None = None  # e.g., "Mike Trout"
     raw_question: str = ""  # original question text
+
+    @property
+    def year(self) -> int | None:
+        """Backward-compatibility shim.
+
+        Legacy code and tests pass ``year=int`` directly. This property extracts
+        the year from a SINGLE time_period so existing call sites don't break::
+
+            decision.year   ← still works on RouteResult even though the field
+                              is now time_period: TimePeriod | None
+
+        Returns None if the query used a range, decade, or relative period.
+        """
+        if self.time_period is None:
+            return None
+        if self.time_period.type == TimePeriodType.SINGLE and isinstance(
+            self.time_period.value, int
+        ):
+            return self.time_period.value
+        return None
 
 
 _ROUTING_PROMPT = (
@@ -31,7 +146,14 @@ _ROUTING_PROMPT = (
     "'general_explanation' only when none of the above apply\n"
     "- stat: the canonical stat name if detectable (RBI, HR, AVG, ERA, WHIP, SO, SB, 2B,"
     " 3B, W, L, PO, etc.); null otherwise\n"
-    "- year: the season/year mentioned (integer); null if none\n"
+    "- time_period: a time filter object with 'type' and 'value'. Types:\n"
+    "  - single   : a specific year — value is an integer (e.g. 1972)\n"
+    "  - decade   : a named decade  — value is the decade number 0-99 "
+    "(e.g. 70 for 'seventies' or '1970s', 80 for '80s')\n"
+    "  - range    : an explicit year span — value is [start_year, end_year]\n"
+    "  - relative : a past/future offset — value is {{direction: 'past'|'future', "
+    "unit: 'year'|'season'|'decade', count: integer}}\n"
+    "  - null if no time filter is present\n"
     "- position: 'OF' or 'CF' etc. if a defensive position is specified; null otherwise\n"
     "- player_name: the full player name if one is mentioned "
     '(e.g., "Ronald Acuna Jr."); null otherwise\n\n'
@@ -39,29 +161,36 @@ _ROUTING_PROMPT = (
     "Never guess — return null for any field not explicitly in the question.\n\n"
     "Examples:\n"
     '- "who led MLB in RBIs in 2022" → '
-    '{{"intent":"stat_query","stat":"RBI","year":2022,"position":null,'
-    '"player_name":null}}\n'
+    '{{"intent":"stat_query","stat":"RBI","time_period":{{"type":"single","value":2022}},'
+    '"position":null,"player_name":null}}\n'
+    '- "most HRs in the seventies" → '
+    '{{"intent":"stat_query","stat":"HR","time_period":{{"type":"decade","value":70}},'
+    '"position":null,"player_name":null}}\n'
+    '- "who had most RBIs between 1960-1980" → '
+    '{{"intent":"stat_query","stat":"RBI","time_period":{{"type":"range","value":[1960,1980]}},'
+    '"position":null,"player_name":null}}\n'
     '- "how many HRs did Aaron Judge have last year" → '
-    '{{"intent":"stat_query","stat":"HR","year":null,"position":null,'
-    '"player_name":"Aaron Judge"}}\n'
+    '{{"intent":"stat_query","stat":"HR","time_period":{{"type":"relative",'
+    '"value":{{"direction":"past","unit":"year","count":1}}}},'
+    '"position":null,"player_name":"Aaron Judge"}}\n'
     '- "who was Wally Pipp" → '
-    '{{"intent":"player_biography","stat":null,"year":null,"position":null,'
-    '"player_name":"Wally Pipp"}}\n'
+    '{{"intent":"player_biography","stat":null,"time_period":null,'
+    '"position":null,"player_name":"Wally Pipp"}}\n'
     '- "what teams did he play for" → '
-    '{{"intent":"player_biography","stat":null,"year":null,"position":null,'
-    '"player_name":null}}\n'
-    '- "tell me about this player" → '
-    '{{"intent":"player_biography","stat":null,"year":null,"position":null,'
-    '"player_name":null}}\n'
+    '{{"intent":"player_biography","stat":null,"time_period":null,'
+    '"position":null,"player_name":null}}\n'
+    "- 'tell me about this player' → "
+    '{{"intent":"player_biography","stat":null,"time_period":null,'
+    '"position":null,"player_name":null}}\n'
     "- 'what is a forced play in baseball' → "
-    '{{"intent":"general_explanation","stat":null,"year":null,'
+    '{{"intent":"general_explanation","stat":null,"time_period":null,'
     '"position":null,"player_name":null}}\n'
     '- "who played for the Braves in 1936" → '
-    '{{"intent":"freeform_query","stat":null,"year":1936,"position":null,'
-    '"player_name":null}}\n'
+    '{{"intent":"freeform_query","stat":null,"time_period":{{"type":"single","value":1936}},'
+    '"position":null,"player_name":null}}\n'
     '- "list all pitchers with over 300 wins" → '
-    '{{"intent":"freeform_query","stat":null,"year":null,"position":null,'
-    '"player_name":null}}\n'
+    '{{"intent":"freeform_query","stat":null,"time_period":null,'
+    '"position":null,"player_name":null}}\n'
     "\nQuestion: {question}"
 )
 
@@ -138,10 +267,13 @@ def route(question: str) -> RouteResult:
             "freeform_query",
             "general_explanation",
         ):
+            time_period_data = data.get("time_period")
+            time_period: TimePeriod | None = _build_time_period(time_period_data)
+
             return RouteResult(
                 intent=data["intent"],
                 stat=data.get("stat"),
-                year=data.get("year"),
+                time_period=time_period,
                 position=data.get("position"),
                 player_name=data.get("player_name"),
                 raw_question=question,
@@ -151,6 +283,42 @@ def route(question: str) -> RouteResult:
 
     # LM Studio unavailable or LLM returned garbled — use safe fallback
     return _heuristic_route(question)
+
+
+def _build_time_period(data: dict | None) -> TimePeriod | None:
+    """Convert a raw time_period JSON dict from the LLM into a typed TimePeriod.
+
+    Parameters
+    ----------
+    data : dict | None
+        The ``time_period`` field parsed from the routing prompt's JSON output.
+        Shape depends on type::
+
+            {"type": "single",   "value": 1972}
+            {"type": "decade",   "value": 70}
+            {"type": "range",    "value": [1960, 1980]}
+            {"type": "relative", "value": {"direction": "past", "unit": "year", "count": 1}}
+
+        May also be None if the LLM determined no time filter was present.
+
+    Returns
+    -------
+    TimePeriod | None
+        Typed TimePeriod instance. The ``resolved_start`` / ``resolved_end``
+        fields are left as None here — cli.py fills them after extracting a
+        concrete year range based on type.
+    """
+    if data is None:
+        return None
+
+    try:
+        period_type = TimePeriodType(data.get("type"))
+    except ValueError:
+        # Unknown type — degrade gracefully rather than crashing
+        return None
+
+    raw_value: Any = data.get("value")
+    return TimePeriod(type=period_type, value=raw_value)  # type: ignore[arg-type]
 
 
 def _heuristic_route(question: str) -> RouteResult:
@@ -165,16 +333,31 @@ def _heuristic_route(question: str) -> RouteResult:
     leader_re = re.compile(r"\b(most|least|highest|lowest|lead|leader|leaders|top|bottom)\b")
     is_leaderboard = bool(leader_re.search(question))
 
-    # Extract year (4-digit only for fallback)
+    # Extract decade from patterns like "seventies", "1970s" (fallback only)
+    decade: int | None = None
+    m = re.search(r"\b((?:19)?(\d{2})s)\b", question, re.IGNORECASE)
+    if m:
+        raw_decade = m.group(2)
+        decade = int(raw_decade)
+
+    # Extract a 4-digit year as last resort (fallback only — prefer decade above)
     year: int | None = None
     m = re.search(r"\b(20\d{2}|19\d{2})\b", question)
     if m:
         year = int(m.group(1))
 
+    # Build the most specific time_period available
+    if decade is not None:
+        time_period = TimePeriod(type=TimePeriodType.DECADE, value=decade)
+    elif year is not None:
+        time_period = TimePeriod(type=TimePeriodType.SINGLE, value=year)
+    else:
+        time_period = None
+
     return RouteResult(
         intent="stat_query" if is_leaderboard else "general_explanation",
         stat=None,
-        year=year,
+        time_period=time_period,
         position=None,
         player_name=None,  # Never extract players via regex — too error-prone
         raw_question=question,

@@ -32,7 +32,7 @@ class TestPlayerBioQuery:
             mock_route.return_value = RouteResult(
                 intent="player_biography",
                 stat=None,
-                year=None,
+                time_period=None,
                 position=None,
                 player_name="Wally Pipp",
                 raw_question="who was Wally Pipp",
@@ -66,7 +66,7 @@ class TestPlayerBioQuery:
             mock_route.return_value = RouteResult(
                 intent="player_biography",
                 stat=None,
-                year=None,
+                time_period=None,
                 position=None,
                 player_name="Rogers Hornsby",
                 raw_question="tell me about Rogers Hornsby",
@@ -101,7 +101,7 @@ class TestPlayerBioQuery:
             mock_route.return_value = RouteResult(
                 intent="player_biography",
                 stat=None,
-                year=None,
+                time_period=None,
                 position=None,
                 player_name="Mickey Mantle",
                 raw_question="who was Mickey Mantle",
@@ -130,7 +130,7 @@ class TestPlayerBioQuery:
             mock_route.return_value = RouteResult(
                 intent="player_biography",
                 stat=None,
-                year=None,
+                time_period=None,
                 position=None,
                 player_name="Unknown Player",
                 raw_question="who was Unknown Player",
@@ -153,7 +153,7 @@ class TestPlayerBioQuery:
             mock_route.return_value = RouteResult(
                 intent="player_biography",
                 stat=None,
-                year=None,
+                time_period=None,
                 position=None,
                 player_name="Some Player",
                 raw_question="who was Some Player",

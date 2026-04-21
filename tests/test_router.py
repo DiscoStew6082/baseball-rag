@@ -34,3 +34,47 @@ class TestRouter:
         q = "who led MLB in RBI in 1957"
         result = route(q)
         assert result.raw_question == q
+
+    # ------------------------------------------------------------------
+    # TimePeriod tests — decade / range / relative extraction
+    # ------------------------------------------------------------------
+
+    def test_decade_seventies(self):
+        """'seventies' → time_period type=decade, value=70."""
+        result = route("who hit the most homers in the seventies")
+        assert result.intent == "stat_query"
+        assert result.stat == "HR"
+        assert result.time_period is not None
+        assert result.time_period.type.value == "decade"
+        assert result.time_period.value == 70
+
+    def test_decade_1980s(self):
+        """'80s' → type=decade, value=80."""
+        result = route("most RBIs in the 80s")
+        assert result.intent == "stat_query"
+        assert result.stat == "RBI"
+        assert result.time_period is not None
+        assert result.time_period.type.value == "decade"
+        assert result.time_period.value == 80
+
+    def test_range_1960_to_1980(self):
+        """'between 1960-1980' → type=range, value=[1960, 1980]."""
+        result = route("who had most RBIs between 1960-1980")
+        assert result.intent == "stat_query"
+        assert result.stat == "RBI"
+        assert result.time_period is not None
+        assert result.time_period.type.value == "range"
+        assert result.time_period.value == [1960, 1980]
+
+    def test_year_backward_compat(self):
+        """Single-year queries still expose .year for backward compat."""
+        result = route("who led MLB in RBIs in 2022")
+        assert result.year == 2022
+        assert result.stat == "RBI"
+
+    def test_time_period_single_no_year_ambiguity(self):
+        """A decade query returns None from the .year property (not ambiguous)."""
+        result = route("most HRs in the seventies")
+        # .year is a backward-compat shim that only works for single-year queries
+        assert result.year is None
+        assert result.time_period is not None

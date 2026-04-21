@@ -57,6 +57,63 @@ def get_stat_leaders(stat: str, year: int) -> list[dict]:
 
 
 @traced(component_id="duckdb", label="DB Query")
+def get_stat_leaders_range(stat: str, start_year: int, end_year: int) -> list[dict]:
+    """Get top 10 batting stat leaders aggregated over a year range.
+
+    Aggregates the named stat across all seasons in [start_year, end_year]
+    (inclusive), then ranks by total. This handles decade queries
+    ("seventies") and explicit ranges ("1960-1980").
+
+    Parameters
+    ----------
+    stat : str
+        The statistic to rank by (HR, RBI, H, AB, R, 2B, 3B)
+    start_year : int
+        First season in the range (inclusive).
+    end_year : int
+        Last season in the range (inclusive). Must be >= start_year.
+
+    Returns
+    -------
+    list[dict]
+        List of dicts with keys: name, team ("Range"), stat_value
+    """
+    col_map = {
+        "HR": "HR",
+        "RBI": "RBI",
+        "H": "H",
+        "AB": "AB",
+        "R": "R",
+        "2B": '"2B"',
+        "3B": '"3B"',
+        "SB": "SB",
+        "BB": "BB",
+        "SO": "SO",
+    }
+    col = col_map.get(stat, stat)
+
+    query = f"""
+    SELECT
+        p.nameLast || ', ' || p.nameFirst AS name,
+        SUM(b.{col}) AS stat_value
+    FROM batting b
+    JOIN people p ON b.playerID = p.playerID
+    WHERE b.yearID >= ?
+      AND b.yearID <= ?
+      AND b.{col} IS NOT NULL
+    GROUP BY p.nameLast, p.nameFirst
+    HAVING SUM(b.{col}) > 0
+    ORDER BY stat_value DESC
+    LIMIT 10
+    """
+
+    conn = get_duckdb()
+    result = conn.execute(query, [start_year, end_year]).fetchall()
+
+    return [{"name": r[0], "team": "Range", "stat_value": r[1]} for r in result]
+
+
+@traced(component_id="duckdb", label="DB Query")
 def get_career_stat_leaders(stat: str, limit: int = 10) -> list[dict]:
     """Get career batting stat leaders.
 

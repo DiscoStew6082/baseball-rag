@@ -3,11 +3,17 @@
 import logging
 import sys
 
-from baseball_rag.db import get_career_stat_leaders, get_player_stat, get_stat_leaders, init_db
+from baseball_rag.db import (
+    get_career_stat_leaders,
+    get_player_stat,
+    get_stat_leaders_range,
+    init_db,
+)
 from baseball_rag.db.duckdb_schema import get_duckdb
 from baseball_rag.generation.prompt import build_explanation_prompt, build_open_prompt
 from baseball_rag.retrieval.chroma_store import retrieve
 from baseball_rag.routing import route
+from baseball_rag.routing.query_router import TimePeriodType
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +36,34 @@ def answer(question: str) -> str:
 
     if decision.intent == "stat_query":
         stat = decision.stat or "HR"
-        year = decision.year
+        tp = decision.time_period
 
-        # Player-specific query — get their stat for the specified year (or latest)
+        # ---- Resolve time_period to concrete [start_year, end_year] -----------------
+        # The LLM only gives us the raw value; cli.py resolves it to a range so the
+        # DB layer gets clean integers. This keeps calendar math out of the prompt.
+        if tp is not None:
+            if tp.type == TimePeriodType.DECADE and isinstance(tp.value, int):
+                decade = tp.value  # e.g. 70 → 1970-1979
+                start_year = 1900 + decade
+                end_year = start_year + 9
+                tp.resolved_start = start_year
+                tp.resolved_end = end_year
+            elif tp.type == TimePeriodType.RANGE and isinstance(tp.value, list):
+                start_year, end_year = tp.value[0], tp.value[-1]
+                tp.resolved_start = start_year
+                tp.resolved_end = end_year
+            elif tp.type == TimePeriodType.SINGLE and isinstance(tp.value, int):
+                start_year = end_year = tp.value
+                tp.resolved_start = start_year
+                tp.resolved_end = end_year
+            else:
+                # relative or unparseable — degrade to career
+                tp = None
+
+        # ---- Player-specific query -------------------------------------------------
         if decision.player_name:
             conn = get_duckdb()
-            result = get_player_stat(conn, decision.player_name, stat, year=year)
+            result = get_player_stat(conn, decision.player_name, stat, year=decision.year)
             if result:
                 team_str = f" ({result['team']})" if result["team"] else ""
                 return (
@@ -43,22 +71,12 @@ def answer(question: str) -> str:
                 )
             # Player found but no stat for that year — fall through to leaders
 
-        if year:
-            rows = get_stat_leaders(stat, year)
-            if not rows and decision.player_name:
-                # Requested year had no results for this player — show their latest
-                conn = get_duckdb()
-                result = get_player_stat(conn, decision.player_name, stat)
-                if result:
-                    team_str = f" ({result['team']})" if result["team"] else ""
-                    return (
-                        f"{result['name']}{team_str} "
-                        f"({result['year']}): {result['stat_value']} {stat}"
-                    )
-            lines = [f"Top {stat} leaders for {year}:"]
+        # ---- League-wide leaders ---------------------------------------------------
+        if tp is not None and tp.resolved_start is not None:
+            rows = get_stat_leaders_range(stat, start_year, end_year)
+            lines = [f"Top {stat} leaders ({start_year}-{end_year}):"]
             for i, row in enumerate(rows[:10], 1):
-                team_str = f" ({row['team']})" if row["team"] else ""
-                lines.append(f"  {i}. {row['name']}{team_str}: {row['stat_value']} {stat}")
+                lines.append(f"  {i}. {row['name']}: {row['stat_value']} {stat}")
         else:
             rows = get_career_stat_leaders(stat)
             lines = [f"All-time career {stat} leaders:"]
