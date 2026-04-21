@@ -339,18 +339,60 @@ def _heuristic_route(question: str) -> RouteResult:
     leader_re = re.compile(r"\b(most|least|highest|lowest|lead|leader|leaders|top|bottom)\b")
     is_leaderboard = bool(leader_re.search(question))
 
-    # Extract decade from patterns like "seventies", "1970s" (fallback only)
+    # Extract decade from "70s", "1970s", or word forms like "seventies"
+    decade_words = {
+        "nineteen-hundreds": 0,
+        "nineteen hundreds": 0,
+        "aughts": 0,
+        "tens": 10,
+        "twenties": 20,
+        "thirties": 30,
+        "forties": 40,
+        "fifties": 50,
+        "sixties": 60,
+        "seventies": 70,
+        "eighties": 80,
+        "nineties": 90,
+    }
     decade: int | None = None
     m = re.search(r"\b((?:19)?(\d{2})s)\b", question, re.IGNORECASE)
-    if m:
-        raw_decade = m.group(2)
-        decade = int(raw_decade)
+    if not m:
+        # Try word forms: "seventies", "eighties", etc.
+        lower_q = question.lower()
+        for words, val in decade_words.items():
+            if words in lower_q:
+                decade = val
+                break
 
     # Extract a 4-digit year as last resort (fallback only — prefer decade above)
     year: int | None = None
     m = re.search(r"\b(20\d{2}|19\d{2})\b", question)
     if m:
         year = int(m.group(1))
+
+    # Extract stat from the question text ("homer", "home runs", "HRs", etc.)
+    stat_aliases = {
+        "hr": "HR",
+        "hrs": "HR",
+        "homers": "HR",
+        "home run": "HR",
+        "home runs": "HR",
+        "rbi": "RBI",
+        "rbis": "RBI",
+        "runs batted in": "RBI",
+        "batting average": "AVG",
+        "avg": "AVG",
+        "hits": "H",
+        "runs": "R",
+        "stolen bases": "SB",
+        "sb": "SB",
+    }
+    stat: str | None = None
+    lower_q = question.lower()
+    for phrase, resolved in stat_aliases.items():
+        if phrase in lower_q:
+            stat = resolved
+            break
 
     # Build the most specific time_period available
     if decade is not None:
@@ -362,7 +404,7 @@ def _heuristic_route(question: str) -> RouteResult:
 
     return RouteResult(
         intent="stat_query" if is_leaderboard else "general_explanation",
-        stat=None,
+        stat=stat,
         time_period=time_period,
         position=None,
         player_name=None,  # Never extract players via regex — too error-prone
