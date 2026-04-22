@@ -78,10 +78,43 @@ def answer(question: str) -> str:
             raise
 
         if not chunks:
-            return (
-                f"No player biography found for '{decision.player_name}'. "
-                f"The player may not be in the dataset or the corpus hasn't been indexed yet."
+            # No corpus docs — try to build a bio from structured DuckDB facts instead of
+            # failing.  This means players without indexed articles still get a useful answer.
+            from baseball_rag.db import get_player_facts
+
+            player_name = decision.player_name or question
+            facts = get_player_facts(player_name)
+
+            if not facts:
+                return (
+                    f"No player biography found for '{player_name}'. "
+                    "The player may not be in the dataset or the corpus hasn't been indexed yet."
+                )
+
+            # Build a compact summary string the LLM can narrativize
+            teams_str = ", ".join(facts["teams"]) if facts["teams"] else "multiple teams"
+            bio_facts = (
+                f"Name: {facts['name']}\n"
+                f"Born: {facts.get('birthYear', 'Unknown')}\n"
+                f"Career: {facts.get('debutYear', '?')}–{facts.get('finalYear', '?')}\n"
+                f"Teams: {teams_str}\n"
+                f"Career HR: {facts.get('careerHR', 0)}, RBI: {facts.get('careerRBI', 0)}"
             )
+            try:
+                from baseball_rag.generation.llm import make_request
+
+                response = make_request(
+                    (
+                        "You are a baseball historian. Based ONLY on the facts below, "
+                        "write a concise engaging player biography paragraph.",
+                        f"Facts:\n{bio_facts}\n\nQuestion: {question}",
+                    ),
+                    max_tokens=1500,
+                )
+                return response.content
+            except ConnectionError:
+                # LM Studio not running — return the raw facts rather than nothing
+                return bio_facts
 
         from baseball_rag.generation.prompt import build_player_bio_prompt
 

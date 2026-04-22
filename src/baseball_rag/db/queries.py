@@ -156,6 +156,71 @@ def _is_suffix(s: str) -> bool:
     return s.lower().rstrip(".") in {"jr", "sr", "ii", "iii", "iv"}
 
 
+@traced(component_id="duckdb", label="DB Query")
+def get_player_facts(player_name: str) -> dict | None:
+    """Return career facts for a player, used to generate a bio when no corpus docs exist.
+
+    Returns a dict with keys: name, birthYear, debutYear, finalYear, teams (list),
+    careerHR, careerRBI, or None if the player is not in the database.
+    """
+
+    parts = [p for p in player_name.strip().split() if not _is_suffix(p)]
+    if len(parts) >= 2:
+        first, last = parts[0], " ".join(parts[1:])
+    elif len(parts) == 1:
+        last = parts[0]
+        first = None
+    else:
+        return None
+
+    norm_first = _normalize(first) if first else None
+    norm_last = _normalize(last)
+
+    conn = get_duckdb()
+
+    # Build career summary query across batting (covers most players)
+    if first:
+        where_clause = (
+            "strip_accents(LOWER(p.nameFirst)) = ? AND strip_accents(LOWER(p.nameLast)) = ?"
+        )
+        params: list = [norm_first, norm_last]
+    else:
+        where_clause = "strip_accents(LOWER(p.nameLast)) = ?"
+        params = [norm_last]
+
+    query = f"""
+SELECT
+    p.nameLast || ', ' || p.nameFirst AS name,
+    ANY_VALUE(p.birthYear) AS birthYear,
+    MIN(b.yearID)   AS debutYear,
+    MAX(b.yearID)   AS finalYear,
+    (SELECT LIST(DISTINCT t.name)
+     FROM batting b2
+     JOIN teams t ON b2.teamID = t.teamID
+     WHERE b2.playerID = b.playerID) AS teams,
+    SUM(b.HR)  AS careerHR,
+    SUM(b.RBI) AS careerRBI
+FROM batting b
+JOIN people p ON b.playerID = p.playerID
+WHERE {where_clause}
+GROUP BY p.nameLast, p.nameFirst, b.playerID
+"""
+    result = conn.execute(query, params).fetchone()
+    if not result:
+        return None
+
+    name, birth_year, debut, final_year, teams, career_hr, career_rbi = result
+    return {
+        "name": name,
+        "birthYear": birth_year,
+        "debutYear": debut,
+        "finalYear": final_year,
+        "teams": list(teams) if teams else [],
+        "careerHR": career_hr or 0,
+        "careerRBI": career_rbi or 0,
+    }
+
+
 def get_player_stat(
     conn: duckdb.DuckDBPyConnection,
     player_name: str,
