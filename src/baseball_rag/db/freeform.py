@@ -29,6 +29,10 @@ class FreeformResult:
     row_count: int  # len(rows)
     truncated: bool  # True if results exceeded MAX_ROWS
     params: list[object] = field(default_factory=list)
+    source_label: str = "LLM-backed typed freeform query"
+    source_detail: str = (
+        "LLM extracted a typed intent; Python assembled constrained SQL deterministically."
+    )
 
 
 def query(
@@ -56,16 +60,33 @@ def query(
     hint = get_contextual_hint(question, year)
     enriched_question = f"{question} {hint}".strip() if hint else question
 
-    # 3. Generate SQL via structured intent extraction — Python assembles all SQL
-    spec = _generate_query_spec(enriched_question, schema)
-    assembled = _assemble_sql(spec)
+    # 3. Generate SQL. Canonical baseball-list questions use local templates;
+    # other freeform questions fall back to LLM-backed typed intent extraction.
+    template = _match_deterministic_template(enriched_question)
+    if template is not None:
+        assembled = template.sql
+        source_label = "Deterministic template query"
+        source_detail = template.detail
+    else:
+        spec = _generate_query_spec(enriched_question, schema)
+        assembled = _assemble_sql(spec)
+        source_label = "LLM-backed typed freeform query"
+        source_detail = (
+            "LLM extracted a typed intent; Python assembled constrained SQL deterministically."
+        )
     sql = assembled.sql.strip().rstrip(";")
 
     # Validate table/column references before executing
     _validate_sql(sql, conn)
 
     # 4. Execute with timeout + row limit enforcement
-    result = _execute_safe(sql, conn, assembled.params)
+    result = _execute_safe(
+        sql,
+        conn,
+        assembled.params,
+        source_label=source_label,
+        source_detail=source_detail,
+    )
 
     return result
 
@@ -147,6 +168,121 @@ QueryIntent = QuerySpec
 class AssembledSQL:
     sql: str
     params: list[object] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class DeterministicTemplate:
+    sql: AssembledSQL
+    detail: str
+
+
+def _match_deterministic_template(question: str) -> DeterministicTemplate | None:
+    """Return a local SQL template for well-known baseball list questions."""
+    normalized = re.sub(r"[^a-z0-9]+", " ", question.lower()).strip()
+
+    if "triple crown" in normalized:
+        return DeterministicTemplate(
+            sql=AssembledSQL(
+                """
+                SELECT DISTINCT
+                    p.nameFirst || ' ' || p.nameLast AS player,
+                    b.yearID AS year,
+                    b.lgID AS league,
+                    b.HR,
+                    b.RBI,
+                    ROUND(CAST(b.H AS DOUBLE) / NULLIF(b.AB, 0), 3) AS AVG
+                FROM batting b
+                JOIN people p ON p.playerID = b.playerID
+                WHERE b.AB >= 100
+                  AND b.HR = (
+                    SELECT MAX(b2.HR) FROM batting b2
+                    WHERE b2.yearID = b.yearID AND b2.lgID = b.lgID
+                  )
+                  AND b.RBI = (
+                    SELECT MAX(b2.RBI) FROM batting b2
+                    WHERE b2.yearID = b.yearID AND b2.lgID = b.lgID
+                  )
+                  AND CAST(b.H AS DOUBLE) / NULLIF(b.AB, 0) = (
+                    SELECT MAX(CAST(b2.H AS DOUBLE) / NULLIF(b2.AB, 0))
+                    FROM batting b2
+                    WHERE b2.yearID = b.yearID
+                      AND b2.lgID = b.lgID
+                      AND b2.AB >= 100
+                  )
+                ORDER BY b.yearID, b.lgID, player
+                """
+            ),
+            detail=(
+                "Matched local Triple Crown template: batting HR, RBI, and AVG "
+                "league leaders by season."
+            ),
+        )
+
+    if "30 30" in normalized and "club" in normalized:
+        return DeterministicTemplate(
+            sql=AssembledSQL(
+                """
+                SELECT
+                    p.nameFirst || ' ' || p.nameLast AS player,
+                    b.yearID AS year,
+                    SUM(b.HR) AS HR,
+                    SUM(b.SB) AS SB
+                FROM batting b
+                JOIN people p ON p.playerID = b.playerID
+                GROUP BY b.playerID, p.nameFirst, p.nameLast, b.yearID
+                HAVING SUM(b.HR) >= 30 AND SUM(b.SB) >= 30
+                ORDER BY b.yearID, player
+                """
+            ),
+            detail=(
+                "Matched local 30-30 club template: player seasons with at least 30 HR and 30 SB."
+            ),
+        )
+
+    if (
+        "500" in normalized
+        and "club" in normalized
+        and ("hr" in normalized or "home run" in normalized or "homer" in normalized)
+    ):
+        return DeterministicTemplate(
+            sql=AssembledSQL(
+                """
+                SELECT
+                    p.nameFirst || ' ' || p.nameLast AS player,
+                    SUM(b.HR) AS career_HR
+                FROM batting b
+                JOIN people p ON p.playerID = b.playerID
+                GROUP BY b.playerID, p.nameFirst, p.nameLast
+                HAVING SUM(b.HR) >= 500
+                ORDER BY career_HR DESC, player
+                """
+            ),
+            detail="Matched local 500 HR club template: career batting home run totals.",
+        )
+
+    if (
+        "career" in normalized
+        and ("pitching" in normalized or "pitcher" in normalized)
+        and ("win" in normalized or "wins" in normalized)
+        and "leader" in normalized
+    ):
+        return DeterministicTemplate(
+            sql=AssembledSQL(
+                """
+                SELECT
+                    p.nameFirst || ' ' || p.nameLast AS player,
+                    SUM(pi.W) AS career_W
+                FROM pitching pi
+                JOIN people p ON p.playerID = pi.playerID
+                GROUP BY pi.playerID, p.nameFirst, p.nameLast
+                ORDER BY career_W DESC, player
+                LIMIT 10
+                """
+            ),
+            detail="Matched local career pitching wins leaders template: career pitching W totals.",
+        )
+
+    return None
 
 
 def _parse_intent(raw: str) -> QuerySpec:
@@ -433,7 +569,14 @@ def _validate_sql(sql: str, conn: duckdb.DuckDBPyConnection) -> None:
 
 
 def _execute_safe(
-    sql: str, conn: duckdb.DuckDBPyConnection, params: list[object] | None = None
+    sql: str,
+    conn: duckdb.DuckDBPyConnection,
+    params: list[object] | None = None,
+    *,
+    source_label: str = "LLM-backed typed freeform query",
+    source_detail: str = (
+        "LLM extracted a typed intent; Python assembled constrained SQL deterministically."
+    ),
 ) -> FreeformResult:
     """Execute with timeout and row limit guardrails."""
     # Set DuckDB query timeout (best effort -- not all DuckDB versions support this)
@@ -459,6 +602,8 @@ def _execute_safe(
             row_count=len(rows),
             truncated=truncated,
             params=safe_params,
+            source_label=source_label,
+            source_detail=source_detail,
         )
     except Exception as e:
         raise RuntimeError(f"Query failed: {e}\nSQL: {sql}") from e

@@ -214,8 +214,8 @@ def _answer_freeform(question: str, decision: Any) -> StructuredAnswer:
     query_result = query(decision.raw_question, conn)
     source = SourceRecord(
         type="duckdb",
-        label="Freeform SQL query",
-        detail="Natural-language intent converted to a constrained SQL query.",
+        label=query_result.source_label,
+        detail=query_result.source_detail,
         sql=query_result.sql,
         columns=query_result.columns,
         rows=_rows_to_dicts(query_result.columns, query_result.rows[:100]),

@@ -218,3 +218,55 @@ class TestGenerateSQLDeterminism:
         with patch("baseball_rag.db.freeform.make_request", return_value=mock_resp) as mock_call:
             _generate_sql("Who played for the Braves in 1936?", "schema")
             assert mock_call.call_count == 1
+
+
+class TestFreeformProvenance:
+    """Focused tests for source labels on freeform query paths."""
+
+    @pytest.mark.parametrize(
+        ("question", "detail"),
+        [
+            ("Who won the Triple Crown and which years?", "Triple Crown template"),
+            ("Show me 30-30 club seasons", "30-30 club template"),
+            ("Who is in the 500 HR club?", "500 HR club template"),
+            ("Career pitching wins leaders", "career pitching wins leaders template"),
+        ],
+    )
+    def test_deterministic_template_source_label(self, question: str, detail: str):
+        from types import SimpleNamespace
+
+        from baseball_rag.service import _answer_freeform
+
+        decision = SimpleNamespace(
+            intent="freeform_query",
+            raw_question=question,
+        )
+
+        with patch(
+            "baseball_rag.db.freeform.make_request",
+            side_effect=AssertionError("deterministic template should not call the LLM"),
+        ):
+            result = _answer_freeform(decision.raw_question, decision)
+
+        assert result.sources[0].label == "Deterministic template query"
+        assert detail in (result.sources[0].detail or "")
+
+    def test_llm_backed_freeform_source_label(self):
+        from types import SimpleNamespace
+
+        from baseball_rag.service import _answer_freeform
+
+        decision = SimpleNamespace(
+            intent="freeform_query",
+            raw_question="Who played for the Braves in 1936?",
+        )
+        mock_resp = MagicMock()
+        mock_resp.content = (
+            '{"stat_tables": ["batting"], "team_name_pattern": "Braves", "year_value": 1936}'
+        )
+
+        with patch("baseball_rag.db.freeform.make_request", return_value=mock_resp):
+            result = _answer_freeform(decision.raw_question, decision)
+
+        assert result.sources[0].label == "LLM-backed typed freeform query"
+        assert "typed intent" in (result.sources[0].detail or "")

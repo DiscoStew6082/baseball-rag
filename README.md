@@ -104,6 +104,19 @@ uv run python -m baseball_rag.web_app
 
 The UI shows the answer, evidence table, source JSON, and SQL for query paths that generate SQL.
 
+## Try These Questions
+
+These make a compact demo script for the CLI, API, or Gradio UI:
+
+- "who had the most RBIs in 1962" - deterministic stat query from DuckDB.
+- "who won the Triple Crown and which years" - deterministic freeform template with a visible provenance badge.
+- "who played for the Braves in 1936" - LLM-backed typed freeform fallback using parameterized SQL.
+- "who played for the Dodgers in 1947" - historical roster query with old team names handled through the database.
+- "who was Babe Ruth" - player biography answer from retrieved corpus documents.
+- "how many home runs did Williams have in 1941" - ambiguity should fail closed instead of guessing Ted Williams.
+- "who played for the Yankees in 1950" - inspect the returned SQL, rows, source manifest, and checksums.
+- "what is the Yankees score right now" - unsupported because this is historical data, not a live scoreboard.
+
 ## Data Provenance
 
 The structured dataset is [`NeuML/baseballdata`](https://huggingface.co/datasets/NeuML/baseballdata), a copy of the Lahman Baseball Database. The local manifest records:
@@ -174,6 +187,10 @@ uv run python -m evals.questions --all-strategies --retrieval-only
 ```
 
 The eval file is intentionally human-readable so it can drive a later test runner, CI report, or model-routing regression harness.
+
+## Why Not Just Ask ChatGPT?
+
+The point is deterministic execution, not smarter-sounding baseball prose. The LLM classifies intent and narrates grounded results; DuckDB executes the structured stat work. Freeform database questions become typed specs, then Python builds parameterized/template SQL instead of trusting model-written SQL. Responses expose SQL where available, result rows, retrieved source docs, and the data manifest with checksums and license metadata. Ambiguous or unsupported questions fail closed, and the eval set protects common baseball-history claims, SQL visibility, source provenance, minimum-sample rules, and live-data limitations from drifting.
 
 ## Why This Is Grounded
 

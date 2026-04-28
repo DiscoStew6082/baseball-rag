@@ -8,9 +8,12 @@ import yaml
 from baseball_rag.provenance import SourceRecord, StructuredAnswer
 from baseball_rag.retrieval.chroma_store import RetrievedChunk
 from evals.questions import (
+    EvalReport,
     StrategyRunResult,
+    format_eval_report,
     format_strategy_summary,
     load_cases,
+    main,
     run_cases,
     run_retrieval_strategy_cases,
     run_strategy_cases,
@@ -392,3 +395,84 @@ def test_format_strategy_summary_renders_table():
     assert "failed" in summary
     assert "skipped" in summary
     assert "chunks" in summary
+
+
+def test_format_eval_report_includes_counts_coverage_and_live_note():
+    cases = load_cases()
+    result = run_cases(
+        cases[:1],
+        answer_fn=lambda _question: _answer(answer="Tommy Davis finished with 153 RBI"),
+    )
+    result.passed.append(
+        result.passed[0].__class__(
+            case_id="second_case",
+            status="passed",
+        )
+    )
+    result.failed.append(
+        result.passed[0].__class__(
+            case_id="broken_case",
+            status="failed",
+            failures=["answer missing substring 'Ruth'"],
+        )
+    )
+
+    report = format_eval_report(
+        EvalReport(
+            command="python -m evals.questions --report docs/eval-report.md",
+            cases=cases,
+            include_live=False,
+            result=result,
+        )
+    )
+
+    assert "# Baseball RAG Eval Report" in report
+    assert "- Command: `python -m evals.questions --report docs/eval-report.md`" in report
+    assert "- Passed: 2" in report
+    assert "- Failed: 1" in report
+    assert "Deterministic/CI-safe mode was used; non-default cases were skipped." in report
+    assert "skipped case(s) may require Chroma, corpus, and LLM services" in report
+    assert "stat query: `stat_rbi_1962`" in report
+    assert "player biography retrieval: `player_bio_babe_ruth`" in report
+    assert "- `broken_case`: answer missing substring 'Ruth'" in report
+
+
+def test_main_writes_markdown_report(tmp_path: Path, monkeypatch):
+    report_path = tmp_path / "eval-report.md"
+    questions_path = tmp_path / "questions.yaml"
+    questions_path.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "questions": [
+                    {
+                        "id": "stat_rbi_1962",
+                        "question": "who had the most RBIs in 1962",
+                        "intent": "stat_query",
+                        "expected_answer_contains": ["Davis", "153", "RBI"],
+                        "expected_min_rows": 1,
+                        "required_sources": ["duckdb"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def answer_fn(question: str) -> StructuredAnswer:
+        assert question == "who had the most RBIs in 1962"
+        return _answer(answer="Tommy Davis finished with 153 RBI")
+
+    monkeypatch.setattr(
+        "evals.questions.run_cases",
+        lambda cases, **_kwargs: run_cases(cases, answer_fn=answer_fn),
+    )
+
+    exit_code = main(["--questions", str(questions_path), "--report", str(report_path)])
+
+    assert exit_code == 0
+    content = report_path.read_text(encoding="utf-8")
+    assert f"- Command: `python -m evals.questions --questions {questions_path} --report" in content
+    assert "- Passed:" in content
+    assert "## Failed Cases" in content
+    assert "- None" in content
