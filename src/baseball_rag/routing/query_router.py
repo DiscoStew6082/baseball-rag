@@ -25,6 +25,7 @@ and the CLI falls back to career-level results (no time filter).
 """
 
 import json
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -270,6 +271,16 @@ def route(question: str) -> RouteResult:
             raw_question=question,
         )
 
+    if _should_use_deterministic_freeform_route(question):
+        return RouteResult(
+            intent="freeform_query",
+            stat=None,
+            time_period=None,
+            position=None,
+            player_name=None,
+            raw_question=question,
+        )
+
     deterministic = _heuristic_route(question)
     if (
         deterministic.intent == "stat_query"
@@ -464,6 +475,36 @@ def _should_use_deterministic_stat_route(question: str) -> bool:
         "best",
     )
     return any(term in lower_q for term in leaderboard_terms)
+
+
+def _should_use_deterministic_freeform_route(question: str) -> bool:
+    """Return True for freeform templates that do not need router LLM help."""
+    lower_q = question.lower()
+    compact = re.sub(r"[^a-z0-9]+", " ", lower_q)
+
+    if "triple crown" in compact:
+        return True
+    if re.search(r"\b30\s*30\b", compact) or "thirty thirty" in compact:
+        return True
+    if "500 club" in compact:
+        return True
+    if ("home run" in compact or "homer" in compact or re.search(r"\bhrs?\b", compact)) and (
+        "500" in compact or "club" in compact
+    ):
+        return True
+    if ("pitching" in compact or "pitcher" in compact or "career" in compact) and (
+        "wins" in compact and ("leader" in compact or "500" in compact or "300" in compact)
+    ):
+        return True
+    if "era" in compact and (
+        "career" in compact
+        or "qualified" in compact
+        or "qualifying" in compact
+        or "enough innings" in compact
+        or " innings" in compact
+    ):
+        return True
+    return False
 
 
 def _extract_player_name_heuristic(question: str) -> str | None:

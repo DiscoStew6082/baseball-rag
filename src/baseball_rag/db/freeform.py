@@ -49,16 +49,17 @@ def query(
         ValueError: if the LLM returns unparseable output or schema validation fails.
         RuntimeError: if query times out or DuckDB raises an error.
     """
-    # 1. Get schema description (cached, ~200ms first call)
-    schema = _get_schema_cached(conn)
-
-    # 2. Inject historical context for team nicknames based on the query year
+    # 1. Inject historical context for team nicknames based on the query year
     hint = get_contextual_hint(question, year)
     enriched_question = f"{question} {hint}".strip() if hint else question
 
-    # 3. Generate SQL via structured intent extraction — Python assembles all SQL
-    spec = _generate_query_spec(enriched_question, schema)
-    assembled = _assemble_sql(spec)
+    # 2. Prefer deterministic templates for common baseball-history questions.
+    #    Unmatched questions fall back to LLM-backed typed intent extraction.
+    assembled = _detect_template(enriched_question)
+    if assembled is None:
+        schema = _get_schema_cached(conn)
+        spec = _generate_query_spec(enriched_question, schema)
+        assembled = _assemble_sql(spec)
     sql = assembled.sql.strip().rstrip(";")
 
     # Validate table/column references before executing
@@ -147,6 +148,260 @@ QueryIntent = QuerySpec
 class AssembledSQL:
     sql: str
     params: list[object] = field(default_factory=list)
+
+
+def _normalize_question(question: str) -> str:
+    """Return a compact lowercase form for deterministic template matching."""
+    normalized = re.sub(r"[^a-z0-9]+", " ", question.lower())
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _extract_threshold(text: str, *, default: int) -> int:
+    match = re.search(r"\b(\d{2,4})\b", text)
+    return int(match.group(1)) if match else default
+
+
+def _extract_explicit_wins_threshold(text: str) -> int | None:
+    match = re.search(
+        r"\b(?:over|more than|at least|minimum|min|with|threshold|>=)\s+(\d{2,4})\s+wins?\b",
+        text,
+    )
+    if match:
+        return int(match.group(1))
+    match = re.search(r"\b(\d{2,4})\s+wins?\s+(?:club|threshold)\b", text)
+    return int(match.group(1)) if match else None
+
+
+def _extract_year(text: str) -> int | None:
+    match = re.search(r"\b(18\d{2}|19\d{2}|20\d{2})\b", text)
+    return int(match.group(1)) if match else None
+
+
+def _extract_min_ipouts(text: str, *, default: int) -> int:
+    match = re.search(r"\b(?:at least|minimum|min)?\s*(\d{2,4})\s+innings\b", text)
+    return int(match.group(1)) * 3 if match else default
+
+
+def _unsupported_sql(reason: str) -> AssembledSQL:
+    return AssembledSQL(
+        "SELECT ? AS unsupported_reason WHERE FALSE",
+        [reason],
+    )
+
+
+def _detect_template(question: str) -> AssembledSQL | None:
+    """Return deterministic SQL for high-value freeform baseball-history patterns."""
+    q = _normalize_question(question)
+
+    if "500 club" in q and "home run" not in q and "hr" not in q:
+        return _unsupported_sql(
+            "The question says 500 club but does not specify home runs or pitching wins."
+        )
+
+    if "triple crown" in q:
+        return _triple_crown_sql()
+
+    if re.search(r"\b30\s*30\b", q) or "30 30 club" in q or "thirty thirty" in q:
+        return _thirty_thirty_sql()
+
+    if (
+        ("home run" in q or "homer" in q or re.search(r"\bhrs?\b", q))
+        and ("500" in q or "club" in q or "career" in q)
+        and not _looks_like_single_season(q)
+    ):
+        return _career_home_run_sql(_extract_threshold(q, default=500))
+
+    if (
+        ("wins" in q or re.search(r"\bw\b", q))
+        and ("pitcher" in q or "pitching" in q or "career" in q or "500" in q)
+        and not _looks_like_single_season(q)
+    ):
+        return _career_pitching_wins_sql(_extract_explicit_wins_threshold(q))
+
+    if "era" in q and "career" in q:
+        if not _has_era_qualification_guard(q):
+            return _unsupported_sql(
+                "Career ERA leader questions need an explicit qualification guard."
+            )
+        return _career_era_sql(_extract_min_ipouts(q, default=3000))
+
+    if "era" in q and ("lowest" in q or "best" in q or "leader" in q or "leaders" in q):
+        year = _extract_year(q)
+        if year is None:
+            return _unsupported_sql(
+                "Season ERA leader questions need a specific year and innings qualification."
+            )
+        if not _has_era_qualification_guard(q):
+            return _unsupported_sql(
+                "Season ERA leader questions need an innings qualification guard."
+            )
+        return _qualified_season_era_sql(year, _extract_min_ipouts(q, default=300))
+
+    return None
+
+
+def _has_era_qualification_guard(q: str) -> bool:
+    return "qualified" in q or "qualifying" in q or "enough innings" in q or " innings" in q
+
+
+def _looks_like_single_season(q: str) -> bool:
+    return _extract_year(q) is not None and "career" not in q and "club" not in q
+
+
+def _triple_crown_sql() -> AssembledSQL:
+    return AssembledSQL(
+        """
+        WITH season_batting AS (
+            SELECT
+                b.playerID,
+                b.yearID,
+                b.lgID,
+                p.nameFirst,
+                p.nameLast,
+                SUM(b.HR) AS HR,
+                SUM(b.RBI) AS RBI,
+                SUM(b.H) AS H,
+                SUM(b.AB) AS AB,
+                CAST(SUM(b.H) AS DOUBLE) / NULLIF(SUM(b.AB), 0) AS AVG
+            FROM batting b
+            JOIN people p ON p.playerID = b.playerID
+            WHERE b.lgID IN ('AL', 'NL')
+            GROUP BY b.playerID, b.yearID, b.lgID, p.nameFirst, p.nameLast
+            HAVING SUM(b.AB) >= ?
+        ),
+        league_leaders AS (
+            SELECT
+                yearID,
+                lgID,
+                MAX(HR) AS HR,
+                MAX(RBI) AS RBI,
+                MAX(AVG) AS AVG
+            FROM season_batting
+            GROUP BY yearID, lgID
+        )
+        SELECT
+            s.nameFirst,
+            s.nameLast,
+            s.yearID,
+            s.lgID,
+            s.HR,
+            s.RBI,
+            ROUND(s.AVG, 3) AS AVG
+        FROM season_batting s
+        JOIN league_leaders l
+            ON l.yearID = s.yearID
+            AND l.lgID = s.lgID
+            AND l.HR = s.HR
+            AND l.RBI = s.RBI
+            AND l.AVG = s.AVG
+        ORDER BY s.yearID, s.lgID, s.nameLast, s.nameFirst
+        """,
+        [300],
+    )
+
+
+def _thirty_thirty_sql() -> AssembledSQL:
+    return AssembledSQL(
+        """
+        SELECT
+            p.nameFirst,
+            p.nameLast,
+            b.yearID,
+            SUM(b.HR) AS HR,
+            SUM(b.SB) AS SB
+        FROM batting b
+        JOIN people p ON p.playerID = b.playerID
+        GROUP BY b.playerID, p.nameFirst, p.nameLast, b.yearID
+        HAVING SUM(b.HR) >= ? AND SUM(b.SB) >= ?
+        ORDER BY b.yearID, p.nameLast, p.nameFirst
+        """,
+        [30, 30],
+    )
+
+
+def _career_home_run_sql(threshold: int) -> AssembledSQL:
+    return AssembledSQL(
+        """
+        SELECT
+            p.nameFirst,
+            p.nameLast,
+            SUM(b.HR) AS career_HR
+        FROM batting b
+        JOIN people p ON p.playerID = b.playerID
+        GROUP BY b.playerID, p.nameFirst, p.nameLast
+        HAVING SUM(b.HR) >= ?
+        ORDER BY career_HR DESC, p.nameLast, p.nameFirst
+        """,
+        [threshold],
+    )
+
+
+def _career_pitching_wins_sql(threshold: int | None) -> AssembledSQL:
+    having = "HAVING SUM(pi.W) >= ?" if threshold is not None else ""
+    limit = "" if threshold is not None else "LIMIT ?"
+    params: list[object] = [threshold] if threshold is not None else [25]
+    return AssembledSQL(
+        """
+        SELECT
+            p.nameFirst,
+            p.nameLast,
+            SUM(pi.W) AS career_W
+        FROM pitching pi
+        JOIN people p ON p.playerID = pi.playerID
+        GROUP BY pi.playerID, p.nameFirst, p.nameLast
+        {having}
+        ORDER BY career_W DESC, p.nameLast, p.nameFirst
+        {limit}
+        """.format(having=having, limit=limit),
+        params,
+    )
+
+
+def _career_era_sql(min_ipouts: int) -> AssembledSQL:
+    return AssembledSQL(
+        """
+        SELECT
+            p.nameFirst,
+            p.nameLast,
+            ROUND(27.0 * SUM(pi.ER) / NULLIF(SUM(pi.IPouts), 0), 2) AS career_ERA,
+            SUM(pi.IPouts) AS IPouts
+        FROM pitching pi
+        JOIN people p ON p.playerID = pi.playerID
+        GROUP BY pi.playerID, p.nameFirst, p.nameLast
+        HAVING SUM(pi.IPouts) >= ?
+        ORDER BY career_ERA ASC, IPouts DESC, p.nameLast, p.nameFirst
+        """,
+        [min_ipouts],
+    )
+
+
+def _qualified_season_era_sql(year: int, min_ipouts: int) -> AssembledSQL:
+    return AssembledSQL(
+        """
+        SELECT
+            p.nameFirst,
+            p.nameLast,
+            pi.yearID,
+            pi.lgID,
+            pi.ERA,
+            pi.IPouts
+        FROM pitching pi
+        JOIN people p ON p.playerID = pi.playerID
+        WHERE pi.yearID = ?
+            AND pi.IPouts >= ?
+            AND pi.ERA IS NOT NULL
+            AND pi.ERA = (
+                SELECT MIN(p2.ERA)
+                FROM pitching p2
+                WHERE p2.yearID = pi.yearID
+                    AND p2.lgID = pi.lgID
+                    AND p2.IPouts >= ?
+                    AND p2.ERA IS NOT NULL
+            )
+        ORDER BY pi.yearID, pi.lgID, pi.ERA, p.nameLast, p.nameFirst
+        """,
+        [year, min_ipouts, min_ipouts],
+    )
 
 
 def _parse_intent(raw: str) -> QuerySpec:
@@ -393,6 +648,14 @@ def _validate_sql(sql: str, conn: duckdb.DuckDBPyConnection) -> None:
     """Check all table/column references in sql exist in the schema."""
     # SHOW ALL TABLES returns (database, schema, name, column_names, ...)
     tables = {row[2]: row[3] for row in conn.execute("SHOW ALL TABLES").fetchall()}
+    cte_names = {
+        match.group(1).lower()
+        for match in re.finditer(
+            r"(?:WITH|,)\s+(\w+)\s+AS\s*\(",
+            sql,
+            re.IGNORECASE,
+        )
+    }
 
     # Find TABLE references -- be strict so we don't accidentally capture keywords
     # like BETWEEN, INNER, etc. that sometimes appear on the same line as FROM
@@ -406,6 +669,8 @@ def _validate_sql(sql: str, conn: duckdb.DuckDBPyConnection) -> None:
         referenced_tables |= set(re.findall(rf"\b{keyword}\s+(\w+)\b", sql, re.IGNORECASE))
 
     for tbl in referenced_tables:
+        if tbl.lower() in cte_names:
+            continue
         if tbl.lower() not in {t.lower() for t in tables}:
             raise ValueError(f"Unknown table '{tbl}' in generated SQL")
 
@@ -420,7 +685,9 @@ def _validate_sql(sql: str, conn: duckdb.DuckDBPyConnection) -> None:
     all_valid_cols.add("avg")  # allow computed AVG alias
 
     col_refs = re.findall(r"\b(\w+)\.(\w+)\b", sql, re.IGNORECASE)
-    for _tbl_alias, col in col_refs:
+    for tbl_alias, col in col_refs:
+        if tbl_alias.isdigit():
+            continue
         if col.lower() not in all_valid_cols:
             raise ValueError(
                 f"Unknown column '{col}'. Valid columns: {', '.join(sorted(all_valid_cols))}"

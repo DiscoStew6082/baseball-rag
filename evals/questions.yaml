@@ -103,19 +103,134 @@ questions:
   - id: freeform_triple_crown
     question: "who won the Triple Crown and which years"
     intent: freeform_query
+    ci_safe: true
     expected_sql_parameterized: true
     expected_min_rows: 1
+    required_sources: ["duckdb"]
+    expected_answer_contains: ["Rogers", "Hornsby", "1922"]
+    expected_rows:
+      - nameFirst: "Rogers"
+        nameLast: "Hornsby"
+        yearID: 1922
+        lgID: "NL"
+        HR: 42
+        RBI: 152
     notes: "Requires typed leader_stats HR, RBI, AVG with AVG minimum sample size."
+  - id: freeform_30_30_club
+    question: "show me 30-30 club seasons"
+    intent: freeform_query
+    ci_safe: true
+    expected_sql_parameterized: true
+    expected_min_rows: 1
+    required_sources: ["duckdb"]
+    expected_answer_contains: ["Hank", "Aaron", "1963"]
+    expected_rows:
+      - nameFirst: "Hank"
+        nameLast: "Aaron"
+        yearID: 1963
+        HR: 44
+        SB: 31
+  - id: freeform_500_home_run_club
+    question: "who is in the 500 home run club"
+    intent: freeform_query
+    ci_safe: true
+    expected_sql_parameterized: true
+    expected_min_rows: 1
+    required_sources: ["duckdb"]
+    expected_answer_contains: ["Barry", "Bonds", "Babe", "Ruth"]
+    expected_rows:
+      - nameFirst: "Barry"
+        nameLast: "Bonds"
+        career_HR: 762
+      - nameFirst: "Babe"
+        nameLast: "Ruth"
+        career_HR: 714
   - id: freeform_pitchers_300_wins
     question: "list all pitchers with over 300 wins"
     intent: freeform_query
+    ci_safe: true
+    expected_sql_parameterized: true
     expected_min_rows: 1
     required_sources: ["duckdb"]
+    expected_answer_contains: ["Cy", "Young"]
+    expected_rows:
+      - nameFirst: "Cy"
+        nameLast: "Young"
+        career_W: 511
+  - id: freeform_pitching_wins_leaders
+    question: "career pitching wins leaders"
+    intent: freeform_query
+    ci_safe: true
+    expected_sql_parameterized: true
+    expected_min_rows: 10
+    required_sources: ["duckdb"]
+    expected_answer_contains: ["Cy", "Young", "Walter", "Johnson"]
+    expected_rows:
+      - nameFirst: "Cy"
+        nameLast: "Young"
+        career_W: 511
+      - nameFirst: "Walter"
+        nameLast: "Johnson"
+        career_W: 417
+  - id: freeform_pitchers_500_wins
+    question: "career pitching wins leaders with at least 500 wins"
+    intent: freeform_query
+    ci_safe: true
+    expected_sql_parameterized: true
+    expected_min_rows: 1
+    required_sources: ["duckdb"]
+    expected_answer_contains: ["Cy", "Young", "511"]
+    expected_rows:
+      - nameFirst: "Cy"
+        nameLast: "Young"
+        career_W: 511
   - id: freeform_lowest_era_qualified_1968
     question: "who had the lowest ERA in 1968 with enough innings"
     intent: freeform_query
+    ci_safe: true
     expected_sql_parameterized: true
+    expected_min_rows: 2
+    required_sources: ["duckdb"]
+    expected_answer_contains: ["Luis", "Tiant", "Bob", "Gibson"]
+    expected_rows:
+      - nameFirst: "Luis"
+        nameLast: "Tiant"
+        yearID: 1968
+        lgID: "AL"
+        ERA: 1.6
+      - nameFirst: "Bob"
+        nameLast: "Gibson"
+        yearID: 1968
+        lgID: "NL"
+        ERA: 1.12
     minimum_sample_size: "IPouts >= 300"
+  - id: freeform_career_era_qualified
+    question: "career ERA leaders qualified by enough innings"
+    intent: freeform_query
+    ci_safe: true
+    expected_sql_parameterized: true
+    expected_min_rows: 1
+    required_sources: ["duckdb"]
+    expected_answer_contains: ["Ed", "Walsh"]
+    expected_rows:
+      - nameFirst: "Ed"
+        nameLast: "Walsh"
+        career_ERA: 1.82
+        IPouts: 8893
+  - id: freeform_ambiguous_500_club
+    question: "who is in the 500 club"
+    intent: freeform_query
+    ci_safe: true
+    expected_unsupported: true
+    expected_max_rows: 0
+    required_sources: ["duckdb"]
+  - id: freeform_underqualified_career_era
+    question: "career ERA leaders"
+    intent: freeform_query
+    ci_safe: true
+    expected_unsupported: true
+    expected_max_rows: 0
+    required_sources: ["duckdb"]
   - id: min_sample_avg_2024
     question: "who had the highest batting average in 2024 with at least 100 at bats"
     intent: freeform_query

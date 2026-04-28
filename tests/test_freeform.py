@@ -66,6 +66,104 @@ class TestAssembleSQL:
         assert "distinct" in sql.sql.lower()
 
 
+class TestDeterministicTemplates:
+    """Tests for common freeform patterns that should bypass the LLM."""
+
+    def _run_query(self, question: str):
+        from baseball_rag.db.duckdb_schema import get_duckdb
+        from baseball_rag.db.freeform import query
+
+        return query(question, get_duckdb())
+
+    def test_triple_crown_template_bypasses_llm(self):
+        with patch("baseball_rag.db.freeform.make_request") as mock_call:
+            result = self._run_query("who won the Triple Crown and which years")
+
+        assert mock_call.call_count == 0
+        assert result.params == [300]
+        assert {"nameFirst", "nameLast", "yearID", "HR", "RBI", "AVG"} <= set(result.columns)
+        assert ("Rogers", "Hornsby", 1922, "NL", 42, 152, 0.401) in result.rows
+        assert all(row[3] in ("AL", "NL") for row in result.rows)
+
+    def test_thirty_thirty_template_bypasses_llm(self):
+        with patch("baseball_rag.db.freeform.make_request") as mock_call:
+            result = self._run_query("show me 30-30 club seasons")
+
+        assert mock_call.call_count == 0
+        assert result.params == [30, 30]
+        assert ("Hank", "Aaron", 1963, 44, 31) in result.rows
+
+    def test_500_home_run_club_template_bypasses_llm(self):
+        with patch("baseball_rag.db.freeform.make_request") as mock_call:
+            result = self._run_query("500 home run club")
+
+        assert mock_call.call_count == 0
+        assert result.params == [500]
+        assert result.rows[0] == ("Barry", "Bonds", 762)
+        assert ("Babe", "Ruth", 714) in result.rows
+
+    def test_career_pitching_wins_template_bypasses_llm(self):
+        with patch("baseball_rag.db.freeform.make_request") as mock_call:
+            result = self._run_query("career pitching wins leaders with at least 500 wins")
+
+        assert mock_call.call_count == 0
+        assert result.params == [500]
+        assert result.rows == [("Cy", "Young", 511)]
+
+    def test_career_pitching_wins_leaders_without_threshold(self):
+        with patch("baseball_rag.db.freeform.make_request") as mock_call:
+            result = self._run_query("career pitching wins leaders")
+
+        assert mock_call.call_count == 0
+        assert result.params == [25]
+        assert result.rows[:3] == [
+            ("Cy", "Young", 511),
+            ("Walter", "Johnson", 417),
+            ("Pete", "Alexander", 373),
+        ]
+
+    def test_qualified_season_era_template_bypasses_llm(self):
+        with patch("baseball_rag.db.freeform.make_request") as mock_call:
+            result = self._run_query("who had the lowest ERA in 1968 with enough innings")
+
+        assert mock_call.call_count == 0
+        assert result.params == [1968, 300, 300]
+        assert ("Luis", "Tiant", 1968, "AL", 1.6, 775) in result.rows
+        assert ("Bob", "Gibson", 1968, "NL", 1.12, 914) in result.rows
+
+    def test_qualified_career_era_template_bypasses_llm(self):
+        with patch("baseball_rag.db.freeform.make_request") as mock_call:
+            result = self._run_query("career ERA leaders qualified by enough innings")
+
+        assert mock_call.call_count == 0
+        assert result.params == [3000]
+        assert result.rows[0] == ("Ed", "Walsh", 1.82, 8893)
+
+    def test_career_era_accepts_explicit_innings_guard(self):
+        with patch("baseball_rag.db.freeform.make_request") as mock_call:
+            result = self._run_query("career ERA leaders with at least 1000 innings")
+
+        assert mock_call.call_count == 0
+        assert result.params == [3000]
+        assert result.rows[0] == ("Ed", "Walsh", 1.82, 8893)
+
+    def test_ambiguous_500_club_is_unsupported_without_llm(self):
+        with patch("baseball_rag.db.freeform.make_request") as mock_call:
+            result = self._run_query("who is in the 500 club")
+
+        assert mock_call.call_count == 0
+        assert result.row_count == 0
+        assert result.columns == ["unsupported_reason"]
+
+    def test_underqualified_era_is_unsupported_without_llm(self):
+        with patch("baseball_rag.db.freeform.make_request") as mock_call:
+            result = self._run_query("career ERA leaders")
+
+        assert mock_call.call_count == 0
+        assert result.row_count == 0
+        assert result.columns == ["unsupported_reason"]
+
+
 class TestParseIntent:
     """Tests for the intent parser -- LLM output -> Intent dataclass."""
 
