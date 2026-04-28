@@ -14,12 +14,12 @@ from baseball_rag.retrieval.chroma_store import LMStudioEmbeddingFunction
 PLAYER_BATCH_SIZE = 500
 
 
-def build_index(persist_dir: Path) -> None:
+def build_index(persist_dir: Path, *, include_players: bool = True) -> None:
     """Ingest all corpus documents into a ChromaDB collection.
 
     Creates a "baseball_corpus" collection with one chunk per document,
-    storing text + source filename as metadata. Also indexes player bios
-    from DuckDB for ~24k players.
+    storing text + source filename as metadata. By default, also indexes player
+    bios from DuckDB for ~24k players.
     """
     persist_dir = Path(persist_dir)
 
@@ -64,6 +64,10 @@ def build_index(persist_dir: Path) -> None:
     if static_texts:
         collection.add(documents=static_texts, ids=static_ids, metadatas=static_metas)  # type: ignore[arg-type]
         total_docs += len(static_texts)
+
+    if not include_players:
+        print(f"Indexed {total_docs} documents into baseball_corpus at {persist_dir}")
+        return
 
     # Index player bios from DuckDB
     conn = get_duckdb()

@@ -23,5 +23,10 @@ class TestApi:
         data = response.json()
         assert "answer" in data
         assert isinstance(data["answer"], str)
+        assert data["intent"] == "stat_query"
         assert "sources" in data
         assert isinstance(data["sources"], list)
+        assert data["sources"]
+        assert data["sources"][0]["type"] == "duckdb"
+        assert "warnings" in data
+        assert data["unsupported"] is False

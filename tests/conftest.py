@@ -88,7 +88,7 @@ def rebuild_index(persist_dir: str) -> None:
 
     from baseball_rag.corpus.ingest import build_index
 
-    build_index(Path(persist_dir))
+    build_index(Path(persist_dir), include_players=False)
 
 
 @pytest.fixture

@@ -260,6 +260,24 @@ def route(question: str) -> RouteResult:
 
     Falls back to a simple heuristic if LM Studio is unavailable.
     """
+    if _looks_like_player_bio_followup(question):
+        return RouteResult(
+            intent="player_biography",
+            stat=None,
+            time_period=None,
+            position=None,
+            player_name=None,
+            raw_question=question,
+        )
+
+    deterministic = _heuristic_route(question)
+    if (
+        deterministic.intent == "stat_query"
+        and deterministic.stat is not None
+        and (_should_use_deterministic_stat_route(question) or deterministic.player_name)
+    ):
+        return deterministic
+
     try:
         from baseball_rag.generation.llm import make_request
 
@@ -336,8 +354,17 @@ def _heuristic_route(question: str) -> RouteResult:
     import re
 
     # Only classify as stat_query if it's clearly a league-wide leader request
-    leader_re = re.compile(r"\b(most|least|highest|lowest|lead|leader|leaders|top|bottom)\b")
-    is_leaderboard = bool(leader_re.search(question))
+    lower_q = question.lower()
+    leader_re = re.compile(
+        r"\b(career|most|least|highest|lowest|lead|leader|leaders|top|bottom|best)\b"
+    )
+    is_leaderboard = bool(leader_re.search(lower_q))
+
+    # Extract explicit ranges before single years.
+    range_match = re.search(r"\b(20\d{2}|19\d{2})\s*[-–]\s*(20\d{2}|19\d{2})\b", question)
+    year_range: list[int] | None = None
+    if range_match:
+        year_range = [int(range_match.group(1)), int(range_match.group(2))]
 
     # Extract decade from "70s", "1970s", or word forms like "seventies"
     decade_words = {
@@ -356,9 +383,10 @@ def _heuristic_route(question: str) -> RouteResult:
     }
     decade: int | None = None
     m = re.search(r"\b((?:19)?(\d{2})s)\b", question, re.IGNORECASE)
-    if not m:
+    if m:
+        decade = int(m.group(2))
+    else:
         # Try word forms: "seventies", "eighties", etc.
-        lower_q = question.lower()
         for words, val in decade_words.items():
             if words in lower_q:
                 decade = val
@@ -386,16 +414,24 @@ def _heuristic_route(question: str) -> RouteResult:
         "runs": "R",
         "stolen bases": "SB",
         "sb": "SB",
+        "era": "ERA",
+        "whip": "WHIP",
+        "strikeouts": "SO",
+        "wins": "W",
+        "losses": "L",
     }
     stat: str | None = None
-    lower_q = question.lower()
     for phrase, resolved in stat_aliases.items():
         if phrase in lower_q:
             stat = resolved
             break
 
+    player_name = _extract_player_name_heuristic(question)
+
     # Build the most specific time_period available
-    if decade is not None:
+    if year_range is not None:
+        time_period = TimePeriod(type=TimePeriodType.RANGE, value=year_range)
+    elif decade is not None:
         time_period = TimePeriod(type=TimePeriodType.DECADE, value=decade)
     elif year is not None:
         time_period = TimePeriod(type=TimePeriodType.SINGLE, value=year)
@@ -403,10 +439,57 @@ def _heuristic_route(question: str) -> RouteResult:
         time_period = None
 
     return RouteResult(
-        intent="stat_query" if is_leaderboard else "general_explanation",
+        intent="stat_query" if is_leaderboard or (stat and player_name) else "general_explanation",
         stat=stat,
         time_period=time_period,
         position=None,
-        player_name=None,  # Never extract players via regex — too error-prone
+        player_name=player_name,
         raw_question=question,
+    )
+
+
+def _should_use_deterministic_stat_route(question: str) -> bool:
+    """Return True for simple leaderboard phrasing the heuristic can safely own."""
+    lower_q = question.lower()
+    leaderboard_terms = (
+        "most",
+        "least",
+        "highest",
+        "lowest",
+        "lead",
+        "leader",
+        "leaders",
+        "top",
+        "bottom",
+        "best",
+    )
+    return any(term in lower_q for term in leaderboard_terms)
+
+
+def _extract_player_name_heuristic(question: str) -> str | None:
+    """Extract common two-word player-name patterns for stat questions."""
+    import re
+
+    possessive = re.search(r"\b([A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+)+)'s\b", question)
+    if possessive:
+        return possessive.group(1)
+
+    did_pattern = re.search(
+        r"\b(?:did|does)\s+([A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+)+?)\s+"
+        r"(?:hit|have|get|record)\b",
+        question,
+        re.IGNORECASE,
+    )
+    if did_pattern:
+        return did_pattern.group(1)
+
+    return None
+
+
+def _looks_like_player_bio_followup(question: str) -> bool:
+    lower_q = question.lower()
+    return (
+        "team" in lower_q
+        and "play" in lower_q
+        and any(pronoun in lower_q for pronoun in (" he ", " she ", " they ", " this player"))
     )

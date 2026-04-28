@@ -51,12 +51,12 @@ class TestEndToEndTracing:
         # LLM should be in the trace since corpus-grounding path uses it
         assert "llm" in component_ids or len(stages) >= 2
 
-    def test_retrieve_standalone_is_not_traced(self):
+    def test_retrieve_standalone_is_not_traced(self, chroma_db_dir):
         """Calling retrieve() without start_trace produces no active trace."""
         from baseball_rag.retrieval.chroma_store import retrieve
 
         # No start_trace — tracing should be a no-op
-        results = retrieve("babe ruth", top_k=2)
+        results = retrieve("babe ruth", top_k=2, persist_dir=chroma_db_dir)
         assert isinstance(results, list)
 
     def test_finish_without_start_returns_none(self):

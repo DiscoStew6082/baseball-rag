@@ -1,5 +1,7 @@
 """FastAPI server for Baseball RAG."""
 
+from typing import Any
+
 from fastapi import FastAPI
 from pydantic import BaseModel
 
@@ -12,7 +14,10 @@ class QueryRequest(BaseModel):
 
 class QueryResponse(BaseModel):
     answer: str
-    sources: list[str]
+    intent: str
+    sources: list[dict[str, Any]]
+    warnings: list[str]
+    unsupported: bool
 
 
 @app.get("/health")
@@ -22,7 +27,7 @@ def health():
 
 @app.post("/query", response_model=QueryResponse)
 def query(req: QueryRequest):
-    from baseball_rag.cli import answer as cli_answer
+    from baseball_rag.service import answer
 
-    result = cli_answer(req.question)
-    return QueryResponse(answer=result, sources=[])
+    result = answer(req.question)
+    return QueryResponse(**result.to_dict())

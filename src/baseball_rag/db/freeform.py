@@ -220,12 +220,16 @@ def _leader_condition(tbl: str, stat: str) -> str:
         outer = f"CAST({tbl}.H AS DOUBLE) / NULLIF({tbl}.AB, 0)"
         inner = (
             f"SELECT MAX(CAST(H AS DOUBLE) / NULLIF(AB, 0)) FROM {tbl} b2 "
-            f"WHERE b2.yearID = {tbl}.yearID AND b2.AB > 100"
+            f"WHERE b2.yearID = {tbl}.yearID AND b2.lgID = {tbl}.lgID "
+            f"AND b2.AB > 100"
         )
     else:
         outer = f"{tbl}.{stat}"
         # Use COALESCE to handle years where no one has a value in this stat
-        inner = f"SELECT MAX({stat}) FROM {tbl} b2 WHERE b2.yearID = {tbl}.yearID"
+        inner = (
+            f"SELECT MAX({stat}) FROM {tbl} b2 "
+            f"WHERE b2.yearID = {tbl}.yearID AND b2.lgID = {tbl}.lgID"
+        )
 
     return f"{outer} = ({inner})"
 

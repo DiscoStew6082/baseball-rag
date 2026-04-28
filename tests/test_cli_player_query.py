@@ -28,22 +28,23 @@ class TestLatestYearLogic:
         assert len(result) > 50
 
     def test_with_explicit_year_works_normally(self):
-        """'HR leaders in 1999' → should call get_stat_leaders(HR, 1999)."""
+        """'HR leaders in 1999' → should call range leaders for 1999-1999."""
         from baseball_rag.cli import answer
 
         with (
-            patch("baseball_rag.cli.get_stat_leaders") as mock_yearly,
-            patch("baseball_rag.db.init_db"),
+            patch("baseball_rag.service.get_stat_leaders_range") as mock_yearly,
+            patch("baseball_rag.service.init_db"),
         ):
             mock_yearly.return_value = []
 
             answer("HR leaders in 1999")
 
-            # With explicit year, should definitely use get_stat_leaders
-            assert mock_yearly.called, "get_stat_leaders should be called for queries with a year"
+            # With explicit year, should definitely use the year range query.
+            assert mock_yearly.called, "year range query should be called for explicit years"
             args = mock_yearly.call_args[0]
             assert args[0] == "HR"
             assert args[1] == 1999
+            assert args[2] == 1999
 
     def test_latest_year_should_be_determined_from_db(self):
         """Verify the fix would need to query DB for max(yearID).

@@ -23,9 +23,9 @@ class TestPlayerBioQuery:
         )
 
         with (
-            patch("baseball_rag.cli.route") as mock_route,
-            patch("baseball_rag.cli.retrieve") as mock_retrieve,
-            patch("baseball_rag.db.init_db"),
+            patch("baseball_rag.service.route") as mock_route,
+            patch("baseball_rag.service.retrieve") as mock_retrieve,
+            patch("baseball_rag.service.init_db"),
         ):
             from baseball_rag.routing import RouteResult
 
@@ -56,9 +56,9 @@ class TestPlayerBioQuery:
         )
 
         with (
-            patch("baseball_rag.cli.route") as mock_route,
-            patch("baseball_rag.cli.retrieve") as mock_retrieve,
-            patch("baseball_rag.db.init_db"),
+            patch("baseball_rag.service.route") as mock_route,
+            patch("baseball_rag.service.retrieve") as mock_retrieve,
+            patch("baseball_rag.service.init_db"),
             patch("baseball_rag.generation.prompt.build_player_bio_prompt") as mock_prompt_builder,
         ):
             from baseball_rag.routing import RouteResult
@@ -91,9 +91,9 @@ class TestPlayerBioQuery:
         )
 
         with (
-            patch("baseball_rag.cli.route") as mock_route,
-            patch("baseball_rag.cli.retrieve") as mock_retrieve,
-            patch("baseball_rag.db.init_db"),
+            patch("baseball_rag.service.route") as mock_route,
+            patch("baseball_rag.service.retrieve") as mock_retrieve,
+            patch("baseball_rag.service.init_db"),
             patch("baseball_rag.generation.llm.make_request") as mock_llm,
         ):
             from baseball_rag.routing import RouteResult
@@ -121,9 +121,9 @@ class TestPlayerBioQuery:
     def test_player_biography_no_chunks_returns_helpful_message(self):
         """If no bio chunks found, return a helpful message."""
         with (
-            patch("baseball_rag.cli.route") as mock_route,
-            patch("baseball_rag.cli.retrieve") as mock_retrieve,
-            patch("baseball_rag.db.init_db"),
+            patch("baseball_rag.service.route") as mock_route,
+            patch("baseball_rag.service.retrieve") as mock_retrieve,
+            patch("baseball_rag.service.init_db"),
         ):
             from baseball_rag.routing import RouteResult
 
@@ -144,9 +144,9 @@ class TestPlayerBioQuery:
     def test_player_biography_not_found_error_shows_ingest_message(self):
         """If ChromaDB raises NotFoundError, suggest running ingest."""
         with (
-            patch("baseball_rag.cli.route") as mock_route,
-            patch("baseball_rag.cli.retrieve") as mock_retrieve,
-            patch("baseball_rag.db.init_db"),
+            patch("baseball_rag.service.route") as mock_route,
+            patch("baseball_rag.service.retrieve") as mock_retrieve,
+            patch("baseball_rag.service.init_db"),
         ):
             from baseball_rag.routing import RouteResult
 

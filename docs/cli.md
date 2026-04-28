@@ -2,7 +2,7 @@
 
 ## `baseball-rag`
 
-Single command for ad-hoc queries against the RAG pipeline.
+Single command for ad-hoc queries against the grounded answer pipeline.
 
 ### Usage
 
@@ -39,18 +39,21 @@ uv run python -m baseball_rag.cli "what is OPS"
 ```
 answer(question)
   │
-  ├─▶ route(question)              # Classify as stat_query or general_explanation
+  ├─▶ service.answer(question)        # Shared structured answer service
+  │
+  ├─▶ route(question)                 # Classify query intent
   │
   ├─▶ [stat_query]
   │     init_db()
-  │     get_stat_leaders(stat, year)   # DuckDB query → top 10 leaders
+  │     get_stat_leaders_range(...)    # DuckDB query -> top 10 leaders
   │       — or —
-  │     get_career_stat_leaders(stat)  # All-time career leaders
+  │     get_career_stat_leaders(...)   # All-time career leaders
   │
   └─▶ [general_explanation]
         retrieve(question, top_k=3)    # ChromaDB semantic search
         build_explanation_prompt()      # Format with context docs
         make_request(prompt)            # LLM (Gemma via LM Studio)
+        render_text(...)                # CLI-only text rendering
 ```
 
 ### Error Handling
@@ -58,9 +61,14 @@ answer(question)
 | Condition | Behavior |
 |-----------|----------|
 | No year in query | Returns career leaders instead of season leaders |
-| Corpus not indexed | Returns: `(No corpus indexed yet — run: python -m baseball_rag.corpus.ingest)` |
+| Player-specific stat not found | Returns a no-result message instead of switching to league leaders |
+| Corpus not indexed | Returns: `No corpus indexed yet - run: uv run python -m baseball_rag.corpus.ingest` |
+| Corpus index embedding mismatch | Returns a rebuild-index message |
 | LM Studio offline | Falls back to printing retrieved document text (no LLM call) |
 | DuckDB uninitialized | Auto-initializes on first stat query via `init_db()` |
+
+The CLI intentionally does not ask the model to answer from pretraining when no
+grounding evidence is available.
 
 ### Help Text
 

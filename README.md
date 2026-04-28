@@ -1,8 +1,9 @@
-# Baseball RAG Query Engine
+# Grounded Baseball Analytics Assistant
 
 [![CI](https://github.com/DiscoStew6082/baseball-rag/actions/workflows/ci.yml/badge.svg)](https://github.com/DiscoStew6082/baseball-rag/actions/workflows/ci.yml)
 
-A retrieval-augmented generation (RAG) system for MLB history, powered by a local LLM.
+A local-first baseball assistant that answers MLB history and stat questions from
+inspectable DuckDB data and retrieved corpus documents.
 
 ## What It Does
 
@@ -12,7 +13,10 @@ Ask questions about baseball history in natural language:
 - **Player bios:** "who was Babe Ruth"
 - **Stat definitions:** "what is OPS"
 
-The system retrieves relevant corpus documents, then generates a grounded answer using a local LLM (Gemma 4 via LM Studio).
+The system routes each question, queries the appropriate grounded source, and
+returns an answer with provenance metadata. DuckDB is the source of truth for
+structured stats; ChromaDB corpus retrieval is used for stat definitions,
+player biographies, and explanatory context.
 
 ## Architecture
 
@@ -27,8 +31,8 @@ User Question
                            │                         │
                            ▼                         ▼
                     ┌─────────────────────────────────────────┐
-                    │         Generation (LLM + Prompts)      │
-                    │   Grounds response in retrieved context  │
+                    │       Answer Service + Renderers        │
+                    │   Returns answer, sources, warnings     │
                     └─────────────────────────────────────────┘
 ```
 
@@ -61,8 +65,11 @@ uv run python -m baseball_rag.web_app
 Or use the CLI:
 
 ```bash
-uv run python -m baseball_rag.cli ask "who was Babe Ruth"
+uv run python -m baseball_rag.cli "who was Babe Ruth"
 ```
+
+The CLI renders the grounded answer as text. The API returns the same answer
+plus `intent`, `sources`, `warnings`, and `unsupported` fields for inspection.
 
 ### Docker (HuggingFace Space)
 

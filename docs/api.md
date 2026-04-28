@@ -25,7 +25,7 @@ Health check. No authentication required.
 
 ### `POST /query`
 
-Ask a baseball question and get an answer.
+Ask a baseball question and get a grounded answer with provenance metadata.
 
 **Request**
 
@@ -39,8 +39,23 @@ Ask a baseball question and get an answer.
 
 ```json
 {
-  "answer": "Top RBI leaders for 1962:\n  1. Mickey Mantle (New York Yankees): 123 RBI\n  2. ...",
-  "sources": []
+  "answer": "Top RBI leaders (1962-1962):\n  1. Tommy Davis: 153 RBI\n  2. ...",
+  "intent": "stat_query",
+  "sources": [
+    {
+      "type": "duckdb",
+      "label": "RBI leaderboard for 1962-1962",
+      "detail": "Tables: batting, people. Dataset: local Hugging Face NeuML/baseballdata CSVs.",
+      "sql": null,
+      "rows": [
+        { "name": "Davis, Tommy", "team": "Range", "stat_value": 153 }
+      ],
+      "columns": [],
+      "score": null
+    }
+  ],
+  "warnings": [],
+  "unsupported": false
 }
 ```
 
@@ -53,18 +68,22 @@ Ask a baseball question and get an answer.
 | Field | Type | Description |
 |-------|------|-------------|
 | `answer` | string | Full answer text (formatted list for stat queries, prose for general questions) |
-| `sources` | array | Placeholder — reserved for future citation metadata |
+| `intent` | string | Router intent used to answer the question |
+| `sources` | array | DuckDB/Chroma evidence records used to ground the answer |
+| `warnings` | array | Non-fatal caveats, such as missing indexes or truncated results |
+| `unsupported` | boolean | True when the system could not answer from grounded evidence |
 
 ## Error Responses
 
 | Status | Condition |
 |--------|-----------|
 | 422 Unprocessable Entity | Missing or invalid request body |
-| 500 Internal Server Error | LM Studio offline, corpus not indexed, DuckDB error |
+| 500 Internal Server Error | Unexpected DuckDB, ChromaDB, or server error |
 
 ## Architecture Note
 
-The `/query` endpoint delegates directly to `cli.answer()`, which runs the full pipeline:
+The `/query` endpoint calls the shared answer service. The CLI renders the same
+structured answer as text, while the API returns the full JSON payload:
 
 1. **Stat query** → DuckDB lookup (same as CLI)
 2. **General question** → ChromaDB retrieval + LLM generation
