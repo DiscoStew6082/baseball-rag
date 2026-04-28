@@ -44,6 +44,10 @@ class RetrievedChunk:
     source: str
     title: str
     score: float
+    id: str | None = None
+    category: str | None = None
+    player_id: str | None = None
+    doc_kind: str | None = None
 
 
 def _resolve_persist_dir(persist_dir: Path | None) -> Path:
@@ -80,7 +84,10 @@ def get_store(persist_dir: Path) -> chromadb.Collection:
 
 
 def _retrieve_impl(
-    query: str, top_k: int = 3, persist_dir: Path | None = None
+    query: str,
+    top_k: int = 3,
+    persist_dir: Path | None = None,
+    where: dict | None = None,
 ) -> list[RetrievedChunk]:
     """Core retrieval implementation — no tracing overhead."""
     if persist_dir is None:
@@ -91,6 +98,7 @@ def _retrieve_impl(
     results = collection.query(
         query_texts=[query],
         n_results=top_k,
+        where=where,
         include=["documents", "metadatas", "distances"],
     )
 
@@ -110,6 +118,10 @@ def _retrieve_impl(
                 source=str(meta.get("source", "")),
                 title=str(meta.get("title", "")),
                 score=score,
+                id=str(results["ids"][0][i]),
+                category=str(meta.get("category", "")) or None,
+                player_id=str(meta.get("player_id", "")) or None,
+                doc_kind=str(meta.get("doc_kind", "")) or None,
             )
         )
 
@@ -122,7 +134,12 @@ def _retrieve_impl(
 
 
 @traced(component_id="chroma-store", label="Vector Retrieval")
-def retrieve(query: str, top_k: int = 3, persist_dir: Path | None = None) -> list[RetrievedChunk]:
+def retrieve(
+    query: str,
+    top_k: int = 3,
+    persist_dir: Path | None = None,
+    where: dict | None = None,
+) -> list[RetrievedChunk]:
     """Embed query and retrieve top-K relevant chunks.
 
     Args:
@@ -133,7 +150,7 @@ def retrieve(query: str, top_k: int = 3, persist_dir: Path | None = None) -> lis
     Returns:
         List of RetrievedChunk objects sorted by relevance (best first).
     """
-    return _retrieve_impl(query, top_k=top_k, persist_dir=persist_dir)
+    return _retrieve_impl(query, top_k=top_k, persist_dir=persist_dir, where=where)
 
 
 def corpus_diagnostics(persist_dir: Path | None = None) -> dict:

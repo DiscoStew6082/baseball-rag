@@ -3,6 +3,7 @@
 from unittest.mock import patch
 
 from baseball_rag.cli import answer
+from baseball_rag.corpus.player_bios import PlayerCandidate, PlayerResolution
 from baseball_rag.retrieval.chroma_store import RetrievedChunk
 
 
@@ -25,6 +26,8 @@ class TestPlayerBioQuery:
         with (
             patch("baseball_rag.service.route") as mock_route,
             patch("baseball_rag.service.retrieve") as mock_retrieve,
+            patch("baseball_rag.service.get_duckdb"),
+            patch("baseball_rag.corpus.player_bios.resolve_player_by_name") as mock_resolve,
             patch("baseball_rag.service.init_db"),
         ):
             from baseball_rag.routing import RouteResult
@@ -38,13 +41,18 @@ class TestPlayerBioQuery:
                 raw_question="who was Wally Pipp",
             )
             mock_retrieve.return_value = [mock_chunk]
+            mock_resolve.return_value = PlayerResolution(
+                query="Wally Pipp",
+                candidates=[PlayerCandidate("pippwa01", "Wally Pipp", "1913-06-29", "1928-09-30")],
+            )
 
             answer("who was Wally Pipp")
 
-            # Should have called retrieve with the player name
-            mock_retrieve.assert_called()
-            call_args = mock_retrieve.call_args[0]
-            assert "Wally Pipp" in call_args[0] or call_args[0] == "Wally Pipp"
+            mock_retrieve.assert_called_with(
+                "Wally Pipp",
+                top_k=1,
+                where={"player_id": "pippwa01"},
+            )
 
     def test_player_biography_uses_bio_prompt(self):
         """Player biography path should use build_player_bio_prompt, not explanation prompt."""
@@ -58,6 +66,8 @@ class TestPlayerBioQuery:
         with (
             patch("baseball_rag.service.route") as mock_route,
             patch("baseball_rag.service.retrieve") as mock_retrieve,
+            patch("baseball_rag.service.get_duckdb"),
+            patch("baseball_rag.corpus.player_bios.resolve_player_by_name") as mock_resolve,
             patch("baseball_rag.service.init_db"),
             patch("baseball_rag.generation.prompt.build_player_bio_prompt") as mock_prompt_builder,
         ):
@@ -72,6 +82,12 @@ class TestPlayerBioQuery:
                 raw_question="tell me about Rogers Hornsby",
             )
             mock_retrieve.return_value = [mock_chunk]
+            mock_resolve.return_value = PlayerResolution(
+                query="Rogers Hornsby",
+                candidates=[
+                    PlayerCandidate("hornsro01", "Rogers Hornsby", "1915-09-10", "1937-07-20")
+                ],
+            )
             mock_prompt_builder.return_value = "fake prompt"
 
             answer("tell me about Rogers Hornsby")
@@ -93,6 +109,8 @@ class TestPlayerBioQuery:
         with (
             patch("baseball_rag.service.route") as mock_route,
             patch("baseball_rag.service.retrieve") as mock_retrieve,
+            patch("baseball_rag.service.get_duckdb"),
+            patch("baseball_rag.corpus.player_bios.resolve_player_by_name") as mock_resolve,
             patch("baseball_rag.service.init_db"),
             patch("baseball_rag.generation.llm.make_request") as mock_llm,
         ):
@@ -107,6 +125,12 @@ class TestPlayerBioQuery:
                 raw_question="who was Mickey Mantle",
             )
             mock_retrieve.return_value = [mock_chunk]
+            mock_resolve.return_value = PlayerResolution(
+                query="Mickey Mantle",
+                candidates=[
+                    PlayerCandidate("mantlmi01", "Mickey Mantle", "1951-04-17", "1968-09-28")
+                ],
+            )
             # Simulate LM Studio being down
             mock_llm.side_effect = ConnectionError("LM Studio not running")
 
@@ -118,11 +142,55 @@ class TestPlayerBioQuery:
             # Should show the chunk content as fallback
             assert "Mickey Mantle" in result
 
+    def test_generated_player_bio_source_includes_data_manifest(self):
+        """Generated player profiles should carry source dataset provenance."""
+        mock_chunk = RetrievedChunk(
+            text="Babe Ruth generated profile.",
+            source="ruthba01.md",
+            title="Babe Ruth",
+            score=0.95,
+            player_id="ruthba01",
+            doc_kind="generated_player_profile",
+        )
+
+        with (
+            patch("baseball_rag.service.route") as mock_route,
+            patch("baseball_rag.service.retrieve") as mock_retrieve,
+            patch("baseball_rag.service.get_duckdb"),
+            patch("baseball_rag.corpus.player_bios.resolve_player_by_name") as mock_resolve,
+            patch("baseball_rag.service.init_db"),
+            patch("baseball_rag.generation.llm.make_request") as mock_llm,
+        ):
+            from baseball_rag.routing import RouteResult
+            from baseball_rag.service import answer as structured_answer
+
+            mock_route.return_value = RouteResult(
+                intent="player_biography",
+                stat=None,
+                time_period=None,
+                position=None,
+                player_name="Babe Ruth",
+                raw_question="who was Babe Ruth",
+            )
+            mock_retrieve.return_value = [mock_chunk]
+            mock_resolve.return_value = PlayerResolution(
+                query="Babe Ruth",
+                candidates=[PlayerCandidate("ruthba01", "Babe Ruth", "1914-07-11", "1935-05-30")],
+            )
+            mock_llm.side_effect = ConnectionError("LM Studio not running")
+
+            result = structured_answer("who was Babe Ruth")
+
+            assert result.sources[0].data_manifest is not None
+            assert result.sources[0].data_manifest["dataset"]["name"] == "NeuML/baseballdata"
+
     def test_player_biography_no_chunks_returns_helpful_message(self):
         """If no bio chunks found, return a helpful message."""
         with (
             patch("baseball_rag.service.route") as mock_route,
             patch("baseball_rag.service.retrieve") as mock_retrieve,
+            patch("baseball_rag.service.get_duckdb"),
+            patch("baseball_rag.corpus.player_bios.resolve_player_by_name") as mock_resolve,
             patch("baseball_rag.service.init_db"),
         ):
             from baseball_rag.routing import RouteResult
@@ -136,6 +204,7 @@ class TestPlayerBioQuery:
                 raw_question="who was Unknown Player",
             )
             mock_retrieve.return_value = []  # No results
+            mock_resolve.return_value = PlayerResolution(query="Unknown Player", candidates=[])
 
             result = answer("who was Unknown Player")
 
@@ -146,6 +215,8 @@ class TestPlayerBioQuery:
         with (
             patch("baseball_rag.service.route") as mock_route,
             patch("baseball_rag.service.retrieve") as mock_retrieve,
+            patch("baseball_rag.service.get_duckdb"),
+            patch("baseball_rag.corpus.player_bios.resolve_player_by_name") as mock_resolve,
             patch("baseball_rag.service.init_db"),
         ):
             from baseball_rag.routing import RouteResult
@@ -158,9 +229,45 @@ class TestPlayerBioQuery:
                 player_name="Some Player",
                 raw_question="who was Some Player",
             )
+            mock_resolve.return_value = PlayerResolution(
+                query="Some Player",
+                candidates=[PlayerCandidate("some01", "Some Player", None, None)],
+            )
             # Simulate ChromaDB not found error
             mock_retrieve.side_effect = Exception("NotFoundError: collection not found")
 
             result = answer("who was Some Player")
 
             assert "ingest" in result.lower() or "indexed" in result.lower()
+
+    def test_ambiguous_player_name_returns_unsupported_without_retrieval(self):
+        """Ambiguous names should not silently retrieve a random biography."""
+        with (
+            patch("baseball_rag.service.route") as mock_route,
+            patch("baseball_rag.service.retrieve") as mock_retrieve,
+            patch("baseball_rag.service.get_duckdb"),
+            patch("baseball_rag.corpus.player_bios.resolve_player_by_name") as mock_resolve,
+            patch("baseball_rag.service.init_db"),
+        ):
+            from baseball_rag.routing import RouteResult
+
+            mock_route.return_value = RouteResult(
+                intent="player_biography",
+                stat=None,
+                time_period=None,
+                position=None,
+                player_name="Johnson",
+                raw_question="who was Johnson",
+            )
+            mock_resolve.return_value = PlayerResolution(
+                query="Johnson",
+                candidates=[
+                    PlayerCandidate("johns01", "Walter Johnson", "1907-08-02", "1927-09-30"),
+                    PlayerCandidate("johns02", "Randy Johnson", "1988-09-15", "2009-10-04"),
+                ],
+            )
+
+            result = answer("who was Johnson")
+
+            assert "ambiguous" in result.lower()
+            mock_retrieve.assert_not_called()

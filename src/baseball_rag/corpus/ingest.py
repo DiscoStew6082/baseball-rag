@@ -1,5 +1,7 @@
 """Build a ChromaDB vector index from corpus documents."""
 
+import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import chromadb
@@ -42,6 +44,12 @@ def build_index(persist_dir: Path, *, include_players: bool = True) -> None:
     )
 
     total_docs = 0
+    manifest: dict = {
+        "collection_name": "baseball_corpus",
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "static_documents": {"count": 0, "documents": []},
+        "generated_player_profiles": {"count": 0, "documents": []},
+    }
 
     # Index static corpus docs (stat_defs and hof_bios)
     static_texts = []
@@ -60,18 +68,39 @@ def build_index(persist_dir: Path, *, include_players: bool = True) -> None:
                 "title": result["metadata"].get("title", ""),
             }
         )
+        manifest["static_documents"]["documents"].append(
+            {
+                "id": path.stem,
+                "source": str(path.name),
+                "category": result["metadata"].get("category", ""),
+                "title": result["metadata"].get("title", ""),
+            }
+        )
 
     if static_texts:
         collection.add(documents=static_texts, ids=static_ids, metadatas=static_metas)  # type: ignore[arg-type]
         total_docs += len(static_texts)
+        manifest["static_documents"]["count"] = len(static_texts)
 
     if not include_players:
+        _write_corpus_manifest(persist_dir, manifest)
         print(f"Indexed {total_docs} documents into baseball_corpus at {persist_dir}")
         return
 
     # Index player bios from DuckDB
     conn = get_duckdb()
-    player_ids_rows = conn.execute("SELECT DISTINCT playerID FROM batting").fetchall()
+    player_ids_rows = conn.execute(
+        """
+        SELECT DISTINCT playerID FROM (
+            SELECT playerID FROM batting
+            UNION ALL
+            SELECT playerID FROM pitching
+            UNION ALL
+            SELECT playerID FROM fielding
+        )
+        ORDER BY playerID
+        """
+    ).fetchall()
     player_ids = [row[0] for row in player_ids_rows]
     print(f"Found {len(player_ids)} distinct players to index")
 
@@ -83,13 +112,31 @@ def build_index(persist_dir: Path, *, include_players: bool = True) -> None:
     for idx, player_id in enumerate(player_ids):
         try:
             bio_text = build_player_bio(str(player_id), conn)
+            parsed = parse_frontmatter(bio_text)
+            metadata = parsed["metadata"]
             batch_texts.append(bio_text)
             batch_ids.append(f"player:{player_id}")
             batch_metas.append(
                 {
                     "source": f"{player_id}.md",
                     "category": "player_biography",
-                    "title": player_id,
+                    "title": str(metadata.get("title", player_id)),
+                    "player_id": str(player_id),
+                    "doc_kind": "generated_player_profile",
+                    "source_tables": "people,batting,pitching,fielding",
+                }
+            )
+            manifest["generated_player_profiles"]["documents"].append(
+                {
+                    "id": f"player:{player_id}",
+                    "source": f"{player_id}.md",
+                    "category": "player_biography",
+                    "title": str(metadata.get("title", player_id)),
+                    "player_id": str(player_id),
+                    "doc_kind": "generated_player_profile",
+                    "source_tables": metadata.get(
+                        "source_tables", ["people", "batting", "pitching", "fielding"]
+                    ),
                 }
             )
         except Exception as e:
@@ -112,4 +159,14 @@ def build_index(persist_dir: Path, *, include_players: bool = True) -> None:
         collection.add(documents=batch_texts, ids=batch_ids, metadatas=batch_metas)  # type: ignore[arg-type]
         total_docs += len(batch_texts)
 
+    manifest["generated_player_profiles"]["count"] = len(
+        manifest["generated_player_profiles"]["documents"]
+    )
+    _write_corpus_manifest(persist_dir, manifest)
     print(f"Indexed {total_docs} documents into baseball_corpus at {persist_dir}")
+
+
+def _write_corpus_manifest(persist_dir: Path, manifest: dict) -> None:
+    persist_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = persist_dir / "corpus_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

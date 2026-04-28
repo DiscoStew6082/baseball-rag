@@ -68,6 +68,45 @@ class TestChromaStore:
         assert col_a.name == col_b.name
         assert col_a is col_b
 
+    def test_retrieve_passes_metadata_filter_and_maps_player_metadata(self, monkeypatch, tmp_path):
+        """Filtered retrieval should preserve generated player profile metadata."""
+        from unittest.mock import MagicMock
+
+        from baseball_rag.retrieval import chroma_store
+
+        mock_collection = MagicMock()
+        mock_collection.query.return_value = {
+            "ids": [["player:ruthba01"]],
+            "documents": [["# Babe Ruth\n\nGenerated profile"]],
+            "metadatas": [
+                [
+                    {
+                        "source": "ruthba01.md",
+                        "category": "player_biography",
+                        "title": "Babe Ruth",
+                        "player_id": "ruthba01",
+                        "doc_kind": "generated_player_profile",
+                    }
+                ]
+            ],
+            "distances": [[0.1]],
+        }
+        monkeypatch.setattr(chroma_store, "get_store", lambda _persist_dir: mock_collection)
+
+        results = retrieve(
+            "Babe Ruth",
+            top_k=1,
+            persist_dir=tmp_path,
+            where={"player_id": "ruthba01"},
+        )
+
+        mock_collection.query.assert_called_once()
+        assert mock_collection.query.call_args.kwargs["where"] == {"player_id": "ruthba01"}
+        assert results[0].id == "player:ruthba01"
+        assert results[0].title == "Babe Ruth"
+        assert results[0].player_id == "ruthba01"
+        assert results[0].doc_kind == "generated_player_profile"
+
 
 class TestRelevanceThreshold:
     """Tests for relevance threshold — low-scoring retrievals should return empty."""

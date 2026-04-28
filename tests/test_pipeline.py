@@ -26,7 +26,7 @@ class TestCliExceptionHandling:
     def test_retrieve_exception_propagates_from_cli_answer(self):
         """RuntimeError during ChromaDB retrieve propagates instead of returning silent fallback."""
 
-        def fake_retrieve(query, top_k=3, persist_dir=None):
+        def fake_retrieve(query, top_k=3, persist_dir=None, where=None):
             raise RuntimeError("ChromaDB read-only volume")
 
         with patch("baseball_rag.service.retrieve", fake_retrieve):
@@ -40,7 +40,7 @@ class TestCliExceptionHandling:
         class FakeNotFoundError(Exception):
             pass
 
-        def fake_retrieve(query, top_k=3, persist_dir=None):
+        def fake_retrieve(query, top_k=3, persist_dir=None, where=None):
             raise FakeNotFoundError("collection not found")
 
         with patch("baseball_rag.service.retrieve", fake_retrieve):

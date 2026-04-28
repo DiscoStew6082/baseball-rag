@@ -2,7 +2,8 @@
 
 import pytest
 
-from baseball_rag.corpus.player_bios import build_player_bio
+from baseball_rag.corpus.frontmatter import parse_frontmatter
+from baseball_rag.corpus.player_bios import build_player_bio, resolve_player_by_name
 from baseball_rag.db.duckdb_schema import get_duckdb
 
 
@@ -67,3 +68,65 @@ class TestBuildPlayerBio:
         assert years_in_bio == sorted(years_in_bio), (
             f"Years should be chronological: {years_in_bio}"
         )
+
+    def test_generated_bio_frontmatter_contains_provenance_contract(self, conn):
+        """Generated player docs should carry enough metadata to trace their source."""
+        result = build_player_bio("littldi01", conn)
+        metadata = parse_frontmatter(result)["metadata"]
+
+        assert metadata["category"] == "player_biography"
+        assert metadata["doc_kind"] == "generated_player_profile"
+        assert metadata["player_id"] == "littldi01"
+        assert set(metadata["source_tables"]) == {"people", "batting", "pitching", "fielding"}
+
+    def test_build_player_bio_uses_pitching_when_batting_missing(self):
+        """Pitcher-only records should still produce a generated player profile."""
+        import duckdb
+
+        conn = duckdb.connect(database=":memory:")
+        conn.execute(
+            """
+            CREATE TABLE people (
+                playerID TEXT, nameFirst TEXT, nameLast TEXT, birthCity TEXT,
+                birthState TEXT, bats TEXT, throws TEXT, debut DATE, finalGame DATE
+            )
+            """
+        )
+        conn.execute("CREATE TABLE batting (playerID TEXT, yearID INTEGER, teamID TEXT)")
+        conn.execute("CREATE TABLE pitching (playerID TEXT, yearID INTEGER, teamID TEXT)")
+        conn.execute(
+            "CREATE TABLE fielding "
+            "(playerID TEXT, yearID INTEGER, teamID TEXT, POS TEXT, G INTEGER)"
+        )
+        conn.execute(
+            """
+            INSERT INTO people VALUES
+            ('pitch01', 'Pat', 'Pitcher', 'Erie', 'PA', 'R', 'R', '2001-04-01', '2003-09-30')
+            """
+        )
+        conn.execute(
+            "INSERT INTO pitching VALUES ('pitch01', 2001, 'NYA'), ('pitch01', 2002, 'NYA')"
+        )
+        conn.execute("INSERT INTO fielding VALUES ('pitch01', 2001, 'NYA', 'P', 30)")
+
+        result = build_player_bio("pitch01", conn)
+
+        assert "Pat Pitcher" in result
+        assert "Primary position:** P" in result
+        assert "- 2001:" in result
+        assert "- 2002:" in result
+
+
+class TestResolvePlayerByName:
+    def test_resolve_full_name_is_single_candidate(self, conn):
+        resolution = resolve_player_by_name("Dick Littlefield", conn)
+
+        assert resolution.player_id == "littldi01"
+        assert resolution.ambiguous is False
+
+    def test_resolve_last_name_only_reports_ambiguity(self, conn):
+        resolution = resolve_player_by_name("Johnson", conn)
+
+        assert resolution.player_id is None
+        assert resolution.ambiguous is True
+        assert len(resolution.candidates) > 1

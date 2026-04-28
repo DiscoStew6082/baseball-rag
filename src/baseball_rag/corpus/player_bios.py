@@ -1,8 +1,35 @@
 """Generate markdown biography documents for baseball players from DuckDB data."""
 
+from dataclasses import dataclass
 from typing import Optional
 
 import duckdb
+
+
+@dataclass(frozen=True)
+class PlayerCandidate:
+    """A possible player identity for a user-provided name."""
+
+    player_id: str
+    full_name: str
+    debut: str | None
+    final_game: str | None
+
+
+@dataclass(frozen=True)
+class PlayerResolution:
+    """Result of resolving a user-provided name to local player identities."""
+
+    query: str
+    candidates: list[PlayerCandidate]
+
+    @property
+    def player_id(self) -> str | None:
+        return self.candidates[0].player_id if len(self.candidates) == 1 else None
+
+    @property
+    def ambiguous(self) -> bool:
+        return len(self.candidates) > 1
 
 
 def build_player_bio(player_id: str, conn: duckdb.DuckDBPyConnection) -> str:
@@ -58,20 +85,31 @@ def build_player_bio(player_id: str, conn: duckdb.DuckDBPyConnection) -> str:
     full_name = f"{name_first} {name_last}"
     bats_throws = f"{bats}/{throws}" if bats and throws else "Unknown"
 
-    # 2. Get all batting records to build season list and teams summary
-    batting_records = conn.execute(
-        "SELECT yearID, teamID FROM batting WHERE playerID = ? ORDER BY yearID",
-        [player_id],
+    # 2. Get all playing records to build season list and teams summary.
+    # Some pitchers have sparse batting records; use every structured stat table.
+    playing_records = conn.execute(
+        """
+        SELECT DISTINCT yearID, teamID FROM (
+            SELECT yearID, teamID FROM batting WHERE playerID = ?
+            UNION ALL
+            SELECT yearID, teamID FROM pitching WHERE playerID = ?
+            UNION ALL
+            SELECT yearID, teamID FROM fielding WHERE playerID = ?
+        )
+        WHERE yearID IS NOT NULL AND teamID IS NOT NULL
+        ORDER BY yearID, teamID
+        """,
+        [player_id, player_id, player_id],
     ).fetchall()
 
-    if not batting_records:
-        raise ValueError(f"No batting records found for {player_id}")
+    if not playing_records:
+        raise ValueError(f"No playing records found for {player_id}")
 
     # Build season list and group by (year, team) pairs
     seasons: list[tuple[int, str]] = []
     seen_teams: dict[str, tuple[int, int | None]] = {}  # teamID -> (first_year, last_year)
 
-    for year_id, team_id in batting_records:
+    for year_id, team_id in playing_records:
         if team_id is not None:
             seasons.append((int(year_id), team_id))
             if team_id not in seen_teams:
@@ -116,6 +154,12 @@ def build_player_bio(player_id: str, conn: duckdb.DuckDBPyConnection) -> str:
     lines.append(f"title: {full_name}")
     lines.append(f"player_id: {player_id}")
     lines.append("category: player_biography")
+    lines.append("doc_kind: generated_player_profile")
+    lines.append("source_tables:")
+    lines.append("  - people")
+    lines.append("  - batting")
+    lines.append("  - pitching")
+    lines.append("  - fielding")
     lines.append("---")
     lines.append("")
     lines.append(f"# {full_name}")
@@ -149,21 +193,73 @@ def get_player_id_by_name(name: str, conn: duckdb.DuckDBPyConnection) -> str | N
     Returns:
         The playerID if found, or None
     """
-    # Try exact match first
-    row = conn.execute(
-        "SELECT playerID FROM people WHERE nameFirst || ' ' || nameLast = ?",
-        [name],
-    ).fetchone()
-    if row:
-        return row[0]
+    return resolve_player_by_name(name, conn).player_id
 
-    # Try partial match (LIKE)
-    pattern = f"%{name}%"
-    row = conn.execute(
-        "SELECT playerID FROM people WHERE nameFirst LIKE ? OR nameLast LIKE ? LIMIT 1",
-        [pattern, pattern],
-    ).fetchone()
-    if row:
-        return row[0]
 
-    return None
+def resolve_player_by_name(name: str, conn: duckdb.DuckDBPyConnection) -> PlayerResolution:
+    """Resolve a player name without silently choosing among ambiguous matches."""
+    normalized = _normalize_for_sql(name)
+    if not normalized:
+        return PlayerResolution(query=name, candidates=[])
+
+    exact_rows = conn.execute(
+        """
+        SELECT playerID, nameFirst || ' ' || nameLast AS full_name, debut, finalGame
+        FROM people
+        WHERE strip_accents(LOWER(nameFirst || ' ' || nameLast)) = ?
+        ORDER BY debut NULLS LAST, playerID
+        LIMIT 20
+        """,
+        [normalized],
+    ).fetchall()
+    if exact_rows:
+        return PlayerResolution(query=name, candidates=[_candidate(row) for row in exact_rows])
+
+    parts = normalized.split()
+    if len(parts) < 2:
+        rows = conn.execute(
+            """
+            SELECT playerID, nameFirst || ' ' || nameLast AS full_name, debut, finalGame
+            FROM people
+            WHERE strip_accents(LOWER(nameLast)) = ?
+            ORDER BY debut NULLS LAST, playerID
+            LIMIT 20
+            """,
+            [normalized],
+        ).fetchall()
+        return PlayerResolution(query=name, candidates=[_candidate(row) for row in rows])
+
+    first, last = parts[0], " ".join(parts[1:])
+    rows = conn.execute(
+        """
+        SELECT playerID, nameFirst || ' ' || nameLast AS full_name, debut, finalGame
+        FROM people
+        WHERE strip_accents(LOWER(nameLast)) = ?
+          AND strip_accents(LOWER(nameFirst)) LIKE ?
+        ORDER BY debut NULLS LAST, playerID
+        LIMIT 20
+        """,
+        [last, f"{first}%"],
+    ).fetchall()
+    return PlayerResolution(query=name, candidates=[_candidate(row) for row in rows])
+
+
+def _candidate(row: tuple) -> PlayerCandidate:
+    return PlayerCandidate(
+        player_id=str(row[0]),
+        full_name=str(row[1]),
+        debut=str(row[2]) if row[2] else None,
+        final_game=str(row[3]) if row[3] else None,
+    )
+
+
+def _normalize_for_sql(value: str) -> str:
+    import re
+    import unicodedata
+
+    from unidecode import unidecode
+
+    suffixes = {"jr", "sr", "ii", "iii", "iv"}
+    parts = [p for p in value.strip().split() if p.lower().rstrip(".") not in suffixes]
+    folded = unidecode(unicodedata.normalize("NFD", " ".join(parts))).lower()
+    return re.sub(r"[^a-z ]+", "", folded).strip()
