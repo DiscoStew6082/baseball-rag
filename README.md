@@ -223,3 +223,4 @@ Useful docs:
 - [API reference](docs/api.md)
 - [Architecture notes](docs/architecture.md)
 - [CLI notes](docs/cli.md)
+- [Demo checklist](docs/demo-checklist.md)
