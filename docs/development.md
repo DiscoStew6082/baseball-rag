@@ -10,13 +10,40 @@ uv sync
 
 ### Data Dependencies
 
-The project requires MLB data from Sean Lahman's database (hosted by NeuGrid/baseballdata). Download once:
+The project requires MLB data from the Lahman-derived
+`NeuML/baseballdata` dataset. Download once:
 
 ```bash
 uv run python -m baseball_rag.db.download
 ```
 
-This fetches CSV files into `data/` — required before running queries or tests.
+This fetches CSV files into `data/` and regenerates `data/manifest.json`.
+The CSVs are ignored by git; the manifest is tracked as the reproducible data
+contract.
+
+To regenerate the manifest from already-downloaded CSVs:
+
+```bash
+uv run python -m baseball_rag.db.download --manifest-only
+```
+
+### Corpus / Chroma Index
+
+ChromaDB is only the local vector search index. It should be treated as
+generated state, not source. The source corpus is the Markdown under
+`src/baseball_rag/corpus/`.
+
+Build the current curated index from checked-in Markdown only:
+
+```bash
+uv run python -m baseball_rag.corpus --static-only
+```
+
+Build the larger experimental index with generated player bios from DuckDB:
+
+```bash
+uv run python -m baseball_rag.corpus
+```
 
 ### Environment Variables
 
@@ -81,11 +108,11 @@ Python version: **3.11** (ubuntu-latest). All dependencies installed via pip (no
 
 - Package location: `src/baseball_rag/` (explicit package discovery via `[tool.hatch.build.targets.wheel]` in pyproject.toml)
 - Tests live in `tests/`, mirror source layout
-- ChromaDB and DuckDB are initialized lazily on first use (no manual setup step beyond `db download`)
-- Corpus index is wiped and rebuilt on every `ingest` call for reproducibility
+- DuckDB query tables are initialized lazily from downloaded CSVs.
+- ChromaDB indexes are generated local state and are wiped/rebuilt on every corpus build.
 
 ## Adding a New Stat or Player
 
-1. Create the markdown file in `corpus/stat_definitions/` or `corpus/hof/`
-2. Rebuild: `uv run python -m baseball_rag.corpus.ingest`
+1. Create the markdown file in `src/baseball_rag/corpus/stat_definitions/` or `src/baseball_rag/corpus/hof/`
+2. Rebuild: `uv run python -m baseball_rag.corpus --static-only`
 3. No other changes needed — routing, retrieval, and prompts all derive from frontmatter automatically

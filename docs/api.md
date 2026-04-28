@@ -51,7 +51,24 @@ Ask a baseball question and get a grounded answer with provenance metadata.
         { "name": "Davis, Tommy", "team": "Range", "stat_value": 153 }
       ],
       "columns": [],
-      "score": null
+      "score": null,
+      "data_manifest": {
+        "dataset": {
+          "name": "NeuML/baseballdata",
+          "license": "CC BY-SA 3.0"
+        },
+        "coverage": {
+          "structured_stat_years": { "min": 1871, "max": 2025 }
+        },
+        "files": [
+          {
+            "path": "data/Batting.csv",
+            "table": "batting",
+            "rows": 128598,
+            "sha256": "007551e2fe3072aff396a8573de61dceabe14dbf8de20038c8b60e2abe16978f"
+          }
+        ]
+      }
     }
   ],
   "warnings": [],
@@ -72,6 +89,32 @@ Ask a baseball question and get a grounded answer with provenance metadata.
 | `sources` | array | DuckDB/Chroma evidence records used to ground the answer |
 | `warnings` | array | Non-fatal caveats, such as missing indexes or truncated results |
 | `unsupported` | boolean | True when the system could not answer from grounded evidence |
+| `sources[].data_manifest` | object/null | Dataset source, checksums, row counts, coverage, download metadata, and license notes for DuckDB-backed answers |
+
+---
+
+### `GET /sources`
+
+Return the complete local dataset provenance manifest.
+
+**Response**
+
+```json
+{
+  "dataset": {
+    "name": "NeuML/baseballdata",
+    "source_url": "https://huggingface.co/datasets/NeuML/baseballdata",
+    "license": "CC BY-SA 3.0"
+  },
+  "download": {
+    "downloaded_at": "2026-04-20T13:29:00-04:00"
+  },
+  "coverage": {
+    "structured_stat_years": { "min": 1871, "max": 2025 }
+  },
+  "files": []
+}
+```
 
 ## Error Responses
 
@@ -85,8 +128,9 @@ Ask a baseball question and get a grounded answer with provenance metadata.
 The `/query` endpoint calls the shared answer service. The CLI renders the same
 structured answer as text, while the API returns the full JSON payload:
 
-1. **Stat query** → DuckDB lookup (same as CLI)
-2. **General question** → ChromaDB retrieval + LLM generation
+1. **Stat query** → DuckDB lookup with registered stat whitelist
+2. **Freeform query** → typed query spec → parameterized SQL → DuckDB
+3. **General question** → ChromaDB retrieval + LLM generation
 
 This means API and CLI behave identically for the same input.
 

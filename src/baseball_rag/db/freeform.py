@@ -3,9 +3,11 @@
 import json
 import re
 from dataclasses import dataclass, field
+from typing import cast
 
 import duckdb
 
+from baseball_rag.db.stat_registry import StatTable, get_stat, supported_stats, supported_tables
 from baseball_rag.db.team_history import get_contextual_hint
 from baseball_rag.generation.llm import make_request
 
@@ -26,6 +28,7 @@ class FreeformResult:
     columns: list[str]  # Column names from cursor description
     row_count: int  # len(rows)
     truncated: bool  # True if results exceeded MAX_ROWS
+    params: list[object] = field(default_factory=list)
 
 
 def query(
@@ -54,13 +57,15 @@ def query(
     enriched_question = f"{question} {hint}".strip() if hint else question
 
     # 3. Generate SQL via structured intent extraction — Python assembles all SQL
-    sql = _generate_sql(enriched_question, schema).strip().rstrip(";")
+    spec = _generate_query_spec(enriched_question, schema)
+    assembled = _assemble_sql(spec)
+    sql = assembled.sql.strip().rstrip(";")
 
     # Validate table/column references before executing
     _validate_sql(sql, conn)
 
     # 4. Execute with timeout + row limit enforcement
-    result = _execute_safe(sql, conn)
+    result = _execute_safe(sql, conn, assembled.params)
 
     return result
 
@@ -111,8 +116,8 @@ def _get_schema_cached(conn: duckdb.DuckDBPyConnection) -> str:
 # -----------------------------------------------------------------------------
 
 
-@dataclass
-class QueryIntent:
+@dataclass(frozen=True)
+class QuerySpec:
     """Structured intent extracted from a natural language question.
 
     Same intent always produces the same SQL, regardless of LLM version or
@@ -120,7 +125,7 @@ class QueryIntent:
     handles HOW to build the query.
     """
 
-    stat_tables: list[str] = field(default_factory=list)
+    stat_tables: list[StatTable] = field(default_factory=list)
     # batting, pitching, fielding -- which stat tables contain the answer
 
     team_name_pattern: str | None = None
@@ -135,44 +140,57 @@ class QueryIntent:
     # across ALL teams — no teamID filter in the subquery.
 
 
-_VALID_STAT_TABLES: frozenset[str] = frozenset({"batting", "pitching", "fielding"})
+QueryIntent = QuerySpec
 
 
-def _parse_intent(raw: str) -> QueryIntent:
-    """Parse LLM JSON output into a QueryIntent.
+@dataclass(frozen=True)
+class AssembledSQL:
+    sql: str
+    params: list[object] = field(default_factory=list)
+
+
+def _parse_intent(raw: str) -> QuerySpec:
+    """Parse LLM JSON output into a typed QuerySpec.
 
     Tries direct parse, then strips markdown fences, then extracts from {...} blocks.
     Raises ValueError if stat_tables cannot be determined.
     """
     import re as _re
 
-    def _from_data(data: dict) -> QueryIntent | None:
+    def _from_data(data: dict) -> QuerySpec | None:
         tables = data.get("stat_tables")
-        if not tables or any(t.lower() not in _VALID_STAT_TABLES for t in tables):
+        if (
+            not isinstance(tables, list)
+            or not tables
+            or any(str(t).lower() not in supported_tables() for t in tables)
+        ):
             return None  # signal caller to try next block
-        return QueryIntent(
-            stat_tables=[t.lower() for t in tables],
-            team_name_pattern=data.get("team_name_pattern"),
-            year_value=data.get("year_value"),
-            leader_stats=[
-                s.upper()
-                for s in (data.get("leader_stats") or [])
-                if s.upper() in _COMPUTED_STATS
-                or s.upper()
-                in {
-                    "HR",
-                    "RBI",
-                    "W",
-                    "L",
-                    "G",
-                    "GS",
-                    "SV",
-                    "SO",
-                    "BB",
-                    "ERA",
-                    "AVG",
-                }
-            ],
+        typed_tables = cast(list[StatTable], [str(t).lower() for t in tables])
+
+        team_name_pattern = data.get("team_name_pattern")
+        if team_name_pattern is not None and not isinstance(team_name_pattern, str):
+            team_name_pattern = None
+
+        year_value = data.get("year_value")
+        if not isinstance(year_value, int):
+            year_value = None
+
+        leader_stats: list[str] = []
+        for raw_stat in data.get("leader_stats") or []:
+            if not isinstance(raw_stat, str):
+                continue
+            try:
+                stat_def = get_stat(raw_stat)
+            except ValueError:
+                continue
+            if stat_def.table in typed_tables:
+                leader_stats.append(stat_def.canonical)
+
+        return QuerySpec(
+            stat_tables=typed_tables,
+            team_name_pattern=team_name_pattern,
+            year_value=year_value,
+            leader_stats=leader_stats,
         )
 
     candidates = [
@@ -202,40 +220,29 @@ def _parse_intent(raw: str) -> QueryIntent:
     raise ValueError(f"Could not determine stat_tables from LLM response: {raw[:200]}")
 
 
-_AVG_COLS = {"H", "AB"}  # columns needed to compute batting average
-
-# Stats that must be computed inline (not stored as pre-existing columns)
-_COMPUTED_STATS: set[str] = {"AVG"}
-
-
-def _leader_condition(tbl: str, stat: str) -> str:
+def _leader_condition(tbl: StatTable, stat: str) -> str:
     """Return the WHERE clause fragment for a league-wide leader condition.
 
     For regular stats (HR, RBI):  tbl.stat = (SELECT MAX(stat) FROM ... WHERE yearID matches)
     For AVG:                     computed formula = (SELECT MAX(computed) FROM ...)
     Subquery never filters by teamID — it finds the max across ALL teams in that year.
     """
-    if stat.upper() == "AVG":
-        # batting average = H / AB, with guard against div-by-zero
-        outer = f"CAST({tbl}.H AS DOUBLE) / NULLIF({tbl}.AB, 0)"
-        inner = (
-            f"SELECT MAX(CAST(H AS DOUBLE) / NULLIF(AB, 0)) FROM {tbl} b2 "
-            f"WHERE b2.yearID = {tbl}.yearID AND b2.lgID = {tbl}.lgID "
-            f"AND b2.AB > 100"
-        )
-    else:
-        outer = f"{tbl}.{stat}"
-        # Use COALESCE to handle years where no one has a value in this stat
-        inner = (
-            f"SELECT MAX({stat}) FROM {tbl} b2 "
-            f"WHERE b2.yearID = {tbl}.yearID AND b2.lgID = {tbl}.lgID"
-        )
+    stat_def = get_stat(stat, table=tbl)
+    outer = stat_def.expression(tbl)
+    inner_expr = stat_def.expression("b2")
+    aggregate = "MAX" if stat_def.higher_is_better else "MIN"
+    inner = (
+        f"SELECT {aggregate}({inner_expr}) FROM {tbl} b2 "
+        f"WHERE b2.yearID = {tbl}.yearID AND b2.lgID = {tbl}.lgID"
+    )
+    if stat_def.min_sample_clause:
+        inner += f" AND {stat_def.min_sample_clause.format(alias='b2')}"
 
     return f"{outer} = ({inner})"
 
 
-def _assemble_sql(intent: QueryIntent) -> str:
-    """Build SQL deterministically from a QueryIntent.
+def _assemble_sql(intent: QuerySpec) -> AssembledSQL:
+    """Build parameterized SQL deterministically from a QuerySpec.
 
     Same intent always produces the same SQL, regardless of LLM version or
     temperature. The model identifies which tables and leader stats are needed;
@@ -245,8 +252,11 @@ def _assemble_sql(intent: QueryIntent) -> str:
         raise ValueError("intent.stat_tables cannot be empty")
 
     union_parts: list[str] = []
+    params: list[object] = []
 
     for tbl in intent.stat_tables:
+        if tbl not in supported_tables():
+            raise ValueError(f"Unsupported stat table '{tbl}'")
         # Base join: people -> stat_table on playerID
         join_conditions = [f"p.playerID = {tbl}.playerID"]
 
@@ -256,8 +266,9 @@ def _assemble_sql(intent: QueryIntent) -> str:
                 f"FROM people p "
                 f"JOIN {tbl} ON {' AND '.join(join_conditions)} "
                 f"JOIN teams t ON {tbl}.teamID = t.teamID "
-                f"AND t.name ILIKE '%{intent.team_name_pattern}%'"
+                f"AND t.name ILIKE ?"
             )
+            params.append(f"%{intent.team_name_pattern}%")
         else:
             from_part = (
                 f"SELECT DISTINCT p.nameFirst, p.nameLast "
@@ -267,7 +278,8 @@ def _assemble_sql(intent: QueryIntent) -> str:
 
         where_parts: list[str] = []
         if intent.year_value is not None:
-            where_parts.append(f"{tbl}.yearID = {intent.year_value}")
+            where_parts.append(f"{tbl}.yearID = ?")
+            params.append(intent.year_value)
 
         # Build leader conditions deterministically — no raw SQL from LLM
         for stat in intent.leader_stats:
@@ -280,8 +292,8 @@ def _assemble_sql(intent: QueryIntent) -> str:
 
     # Combine with UNION (deduplicates across stat tables)
     if len(union_parts) == 1:
-        return union_parts[0]
-    return "\nUNION\n".join(union_parts)
+        return AssembledSQL(union_parts[0], params)
+    return AssembledSQL("\nUNION\n".join(union_parts), params)
 
 
 # -----------------------------------------------------------------------------
@@ -318,7 +330,19 @@ def _generate_sql(question: str, schema: str) -> str:
     The LLM provides JSON with stat_tables + leader_stats; Python builds
     all SQL deterministically — no raw SQL from the model.
     """
-    prompt = _INTENT_SYSTEM + "\n\nSchema:\n" + schema, question
+    return _assemble_sql(_generate_query_spec(question, schema)).sql
+
+
+def _generate_query_spec(question: str, schema: str) -> QuerySpec:
+    """Convert question to a typed query spec; SQL assembly happens separately."""
+    prompt = (
+        _INTENT_SYSTEM
+        + "\n\nSupported stats:\n"
+        + ", ".join(supported_stats())
+        + "\n\nSchema:\n"
+        + schema,
+        question,
+    )
     response = make_request(prompt, max_tokens=1000, temperature=0.1)
 
     try:
@@ -328,14 +352,16 @@ def _generate_sql(question: str, schema: str) -> str:
         retry_prompt = (
             _INTENT_SYSTEM
             + "\n\nCRITICAL: Only use stat_tables values from {'batting', 'pitching', 'fielding'}. "
-            + "Do NOT use 'people'. Schema:\n"
+            + "Do NOT use 'people'. Supported stats:\n"
+            + ", ".join(supported_stats())
+            + "\nSchema:\n"
             + schema,
             question,
         )
         response = make_request(retry_prompt, max_tokens=1000, temperature=0.1)
         intent = _parse_intent(response.content.strip())
 
-    return _assemble_sql(intent)
+    return intent
 
 
 def _extract_json_blocks(text: str) -> list[tuple[int, int]]:
@@ -406,7 +432,9 @@ def _validate_sql(sql: str, conn: duckdb.DuckDBPyConnection) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _execute_safe(sql: str, conn: duckdb.DuckDBPyConnection) -> FreeformResult:
+def _execute_safe(
+    sql: str, conn: duckdb.DuckDBPyConnection, params: list[object] | None = None
+) -> FreeformResult:
     """Execute with timeout and row limit guardrails."""
     # Set DuckDB query timeout (best effort -- not all DuckDB versions support this)
     try:
@@ -420,7 +448,8 @@ def _execute_safe(sql: str, conn: duckdb.DuckDBPyConnection) -> FreeformResult:
         safe_sql = f"{sql} LIMIT {MAX_ROWS}"
 
     try:
-        rows = conn.execute(safe_sql).fetchall()
+        safe_params = params or []
+        rows = conn.execute(safe_sql, safe_params).fetchall()
         columns = [d[0] for d in conn.description]
         truncated = len(rows) == MAX_ROWS
         return FreeformResult(
@@ -429,6 +458,7 @@ def _execute_safe(sql: str, conn: duckdb.DuckDBPyConnection) -> FreeformResult:
             columns=columns,
             row_count=len(rows),
             truncated=truncated,
+            params=safe_params,
         )
     except Exception as e:
         raise RuntimeError(f"Query failed: {e}\nSQL: {sql}") from e

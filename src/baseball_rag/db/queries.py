@@ -4,6 +4,7 @@ import duckdb
 
 from baseball_rag.arch.tracing import traced
 from baseball_rag.db.duckdb_schema import TEAM_MAP, get_duckdb
+from baseball_rag.db.stat_registry import get_stat
 
 
 def _team_name(team_id: str) -> str:
@@ -22,31 +23,19 @@ def get_stat_leaders(stat: str, year: int) -> list[dict]:
     Returns:
         List of dicts with keys: name, team, stat_value
     """
-    # Map user-facing stat names to DB column names (quote 2B/3B)
-    col_map = {
-        "HR": "HR",
-        "RBI": "RBI",
-        "H": "H",
-        "AB": "AB",
-        "R": "R",
-        "2B": '"2B"',
-        "3B": '"3B"',
-        "SB": "SB",
-        "BB": "BB",
-        "SO": "SO",
-    }
-    col = col_map.get(stat, stat)
+    stat_def = get_stat(stat, table="batting")
+    expr = stat_def.expression("b")
 
     query = f"""
     SELECT
         p.nameLast || ', ' || p.nameFirst AS name,
         b.teamID,
-        b.{col} AS stat_value
+        {expr} AS stat_value
     FROM batting b
     JOIN people p ON b.playerID = p.playerID
     WHERE b.yearID = ?
-      AND b.{col} IS NOT NULL
-    ORDER BY b.{col} DESC
+      AND {expr} IS NOT NULL
+    ORDER BY {expr} DESC
     LIMIT 10
     """
 
@@ -78,31 +67,20 @@ def get_stat_leaders_range(stat: str, start_year: int, end_year: int) -> list[di
     list[dict]
         List of dicts with keys: name, team ("Range"), stat_value
     """
-    col_map = {
-        "HR": "HR",
-        "RBI": "RBI",
-        "H": "H",
-        "AB": "AB",
-        "R": "R",
-        "2B": '"2B"',
-        "3B": '"3B"',
-        "SB": "SB",
-        "BB": "BB",
-        "SO": "SO",
-    }
-    col = col_map.get(stat, stat)
+    stat_def = get_stat(stat, table="batting")
+    expr = stat_def.expression("b")
 
     query = f"""
     SELECT
         p.nameLast || ', ' || p.nameFirst AS name,
-        SUM(b.{col}) AS stat_value
+        SUM({expr}) AS stat_value
     FROM batting b
     JOIN people p ON b.playerID = p.playerID
     WHERE b.yearID >= ?
       AND b.yearID <= ?
-      AND b.{col} IS NOT NULL
+      AND {expr} IS NOT NULL
     GROUP BY p.nameLast, p.nameFirst
-    HAVING SUM(b.{col}) > 0
+    HAVING SUM({expr}) > 0
     ORDER BY stat_value DESC
     LIMIT 10
     """
@@ -124,26 +102,18 @@ def get_career_stat_leaders(stat: str, limit: int = 10) -> list[dict]:
     Returns:
         List of dicts with keys: name, team, stat_value
     """
-    col_map = {
-        "HR": "HR",
-        "RBI": "RBI",
-        "H": "H",
-        "AB": "AB",
-        "R": "R",
-        "2B": '"2B"',
-        "3B": '"3B"',
-    }
-    col = col_map.get(stat, stat)
+    stat_def = get_stat(stat, table="batting")
+    expr = stat_def.expression("b")
 
     query = f"""
     SELECT
         p.nameLast || ', ' || p.nameFirst AS name,
-        SUM(b.{col}) AS stat_value
+        SUM({expr}) AS stat_value
     FROM batting b
     JOIN people p ON b.playerID = p.playerID
-    WHERE b.{col} IS NOT NULL
+    WHERE {expr} IS NOT NULL
     GROUP BY p.nameLast, p.nameFirst
-    HAVING SUM(b.{col}) > 0
+    HAVING SUM({expr}) > 0
     ORDER BY stat_value DESC
     LIMIT ?
     """
@@ -231,19 +201,8 @@ def get_player_stat(
     Returns:
         Dict with keys: name, year, team, stat_value, or None if not found.
     """
-    col_map = {
-        "HR": "HR",
-        "RBI": "RBI",
-        "H": "H",
-        "AB": "AB",
-        "R": "R",
-        "2B": '"2B"',
-        "3B": '"3B"',
-        "SB": "SB",
-        "BB": "BB",
-        "SO": "SO",
-    }
-    col = col_map.get(stat, stat)
+    stat_def = get_stat(stat, table="batting")
+    expr = stat_def.expression("b")
 
     # Split player name into first/last, stripping common suffixes
     parts = [p for p in player_name.strip().split() if not _is_suffix(p)]
@@ -278,11 +237,11 @@ def get_player_stat(
         p.nameLast || ', ' || p.nameFirst AS name,
         b.yearID,
         b.teamID,
-        b.{col} AS stat_value
+        {expr} AS stat_value
     FROM batting b
     JOIN people p ON b.playerID = p.playerID
     WHERE {where_clause}
-      AND b.{col} IS NOT NULL
+      AND {expr} IS NOT NULL
     ORDER BY b.yearID DESC
     LIMIT 1
     """

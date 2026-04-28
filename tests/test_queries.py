@@ -1,5 +1,7 @@
 """Tests for SQL query helpers."""
 
+import pytest
+
 from baseball_rag.db.queries import (
     get_career_stat_leaders,
     get_fielding_leaders,
@@ -63,3 +65,9 @@ def test_get_fielding_leaders_position_parameterization():
         row = result[0]
         assert "player" in row, f"Expected 'player' key, got: {row}"
         assert "stat_value" in row, f"Expected 'stat_value' key, got: {row}"
+
+
+def test_unknown_stat_is_rejected_before_sql_execution():
+    """Unsupported stats must not fall through to raw SQL column names."""
+    with pytest.raises(ValueError, match="Unsupported stat"):
+        get_stat_leaders("HR); DROP TABLE batting; --", 1965)

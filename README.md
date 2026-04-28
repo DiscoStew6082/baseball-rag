@@ -2,96 +2,194 @@
 
 [![CI](https://github.com/DiscoStew6082/baseball-rag/actions/workflows/ci.yml/badge.svg)](https://github.com/DiscoStew6082/baseball-rag/actions/workflows/ci.yml)
 
-A local-first baseball assistant that answers MLB history and stat questions from
-inspectable DuckDB data and retrieved corpus documents.
+Baseball RAG is a local-first question answering system for MLB history. It routes natural language questions to grounded sources, answers from DuckDB or retrieved corpus documents, and returns provenance with the rows, SQL, checksums, and dataset license metadata used to support the answer.
 
-## What It Does
+The project is designed as an AI engineering portfolio piece: the interesting part is not that an LLM can produce baseball prose, but that the system constrains where facts come from and shows its work.
 
-Ask questions about baseball history in natural language:
+## Problem
 
-- **Stat queries:** "who had the most RBIs in 1962"
-- **Player bios:** "who was Babe Ruth"
-- **Stat definitions:** "what is OPS"
+Baseball questions mix structured analytics and fuzzy language:
 
-The system routes each question, queries the appropriate grounded source, and
-returns an answer with provenance metadata. DuckDB is the source of truth for
-structured stats; ChromaDB corpus retrieval is used for stat definitions,
-player biographies, and explanatory context.
+- "who had the most RBIs in 1962"
+- "how many HRs did Ronald Acuna Jr. have in 2023"
+- "who played for the Braves in 1936"
+- "what is OPS"
+- "who was Babe Ruth"
+
+A pure chatbot will often answer confidently without exposing the data. A pure SQL interface is brittle for nontechnical users. This project sits between them: language in, typed routing and whitelisted SQL in the middle, grounded answer plus evidence out.
 
 ## Architecture
 
-```
-User Question
-     │
-     ▼
-┌─────────────┐    ┌──────────────────┐    ┌──────────────────────┐
-│   Router    │───▶│ ChromaDB Store   │    │  DuckDB / Lahman DB  │
-│(query路由)   │    │ (corpus向量检索)       │  (结构化棒球数据查询)      │
-└─────────────┘    └──────────────────┘    └──────────────────────┘
-                           │                         │
-                           ▼                         ▼
-                    ┌─────────────────────────────────────────┐
-                    │       Answer Service + Renderers        │
-                    │   Returns answer, sources, warnings     │
-                    └─────────────────────────────────────────┘
+```text
+Question
+  |
+  v
+Router
+  |-- stat_query ------> DuckDB over NeuML/baseballdata CSVs
+  |-- freeform_query --> typed query spec -> parameterized SQL -> DuckDB
+  |-- player_bio ------> ChromaDB corpus retrieval -> grounded generation
+  |-- explanation -----> ChromaDB corpus retrieval -> grounded generation
+  |
+  v
+StructuredAnswer(answer, intent, sources, warnings, unsupported)
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for a detailed breakdown.
+Key choices:
 
-## Quick Start
+- DuckDB is the source of truth for structured stats.
+- `src/baseball_rag/db/stat_registry.py` is the only stat whitelist used by SQL builders.
+- Freeform SQL keeps the intent-to-SQL idea, but the model only returns a typed query spec. Python assembles parameterized SQL.
+- Every DuckDB source includes `data/manifest.json` provenance: source URL, files, row counts, year coverage, checksums, download time, and license notes.
+- ChromaDB is used for small curated corpus docs: stat definitions and Hall of Fame bios.
 
-### Prerequisites
+## API Example
 
-- Python 3.12+
-- [LM Studio](https://lmstudio.ai/) running with Gemma 4 (or another compatible model)
-- Dependencies: `uv sync`
-
-### Setup
+Start the server:
 
 ```bash
-# Download the Lahman baseball database
-uv run python -m baseball_rag.db.download
-
-# Build the vector index from corpus documents
-uv run python -m baseball_rag.corpus.ingest
-
-# Start the API server
 uv run uvicorn baseball_rag.api.server:app --reload
+```
 
-# In another terminal, start the web UI
+Ask a question:
+
+```bash
+curl -s http://127.0.0.1:8000/query \
+  -H 'content-type: application/json' \
+  -d '{"question":"who had the most RBIs in 1962"}'
+```
+
+Response shape:
+
+```json
+{
+  "answer": "Top RBI leaders (1962-1962):\n  1. Davis, Tommy: 153 RBI\n  ...",
+  "intent": "stat_query",
+  "sources": [
+    {
+      "type": "duckdb",
+      "label": "RBI leaderboard for 1962-1962",
+      "rows": [{ "name": "Davis, Tommy", "team": "Range", "stat_value": 153 }],
+      "sql": null,
+      "data_manifest": {
+        "dataset": { "name": "NeuML/baseballdata", "license": "CC BY-SA 3.0" },
+        "coverage": { "structured_stat_years": { "min": 1871, "max": 2025 } }
+      }
+    }
+  ],
+  "warnings": [],
+  "unsupported": false
+}
+```
+
+Dataset provenance is also available directly:
+
+```bash
+curl -s http://127.0.0.1:8000/sources
+```
+
+## CLI And UI
+
+CLI:
+
+```bash
+uv run baseball-rag "career home run leaders"
+uv run baseball-rag "who was Babe Ruth"
+```
+
+Gradio UI:
+
+```bash
 uv run python -m baseball_rag.web_app
 ```
 
-Or use the CLI:
+The UI shows the answer, evidence table, source JSON, and SQL for query paths that generate SQL.
+
+## Data Provenance
+
+The structured dataset is [`NeuML/baseballdata`](https://huggingface.co/datasets/NeuML/baseballdata), a copy of the Lahman Baseball Database. The local manifest records:
+
+- CSV files: `Batting.csv`, `Fielding.csv`, `People.csv`, `Pitching.csv`
+- Row counts: 128,598 batting, 174,332 fielding, 24,270 people, 57,630 pitching
+- Year coverage: 1871-2025 for structured stat tables
+- SHA-256 checksums for reproducibility
+- Download time: `2026-04-20T13:29:00-04:00`
+- License: CC BY-SA 3.0 per Hugging Face metadata
+
+See [data/manifest.json](data/manifest.json).
+
+Generated data policy:
+
+- `data/manifest.json` is tracked because it documents the data contract.
+- `data/*.csv` is downloaded on demand.
+- `data/*.duckdb`, `data/chroma.sqlite3`, and Chroma UUID directories are generated local state and are not tracked.
+- The checked-in corpus source is the Markdown under `src/baseball_rag/corpus/`; the Chroma index is just a rebuildable search index over that source.
+
+Populate structured data and regenerate the manifest:
 
 ```bash
-uv run python -m baseball_rag.cli "who was Babe Ruth"
+uv run python -m baseball_rag.db.download
 ```
 
-The CLI renders the grounded answer as text. The API returns the same answer
-plus `intent`, `sources`, `warnings`, and `unsupported` fields for inspection.
-
-### Docker (HuggingFace Space)
-
-The `space-app/` directory is configured for [HuggingFace Spaces](https://huggingface.co/spaces). See `space-app/README.md` for details.
-
-## Project Structure
-
-```
-src/baseball_rag/
-├── api/           # FastAPI server endpoints
-├── cli.py         # Command-line interface
-├── corpus/        # Markdown documents + ingestion logic
-│   ├── stat_definitions/  # Baseball stat definitions (HR, RBI, OPS...)
-│   └── hof/              # Hall of Fame player biographies
-├── db/            # DuckDB schema and queries (Lahman data)
-├── generation/    # LLM prompting and answer synthesis
-├── retrieval/     # ChromaDB vector store operations
-└── routing/       # Query classification (stat vs. general)
-```
-
-## Testing
+Rebuild the current small Chroma index from checked-in Markdown only:
 
 ```bash
-uv run pytest -v
+uv run python -m baseball_rag.corpus --static-only
 ```
+
+Build the larger experimental index with generated player bios from DuckDB:
+
+```bash
+uv run python -m baseball_rag.corpus
+```
+
+## Evaluation
+
+The golden eval set lives in [evals/questions.yaml](evals/questions.yaml). It covers:
+
+- known stat answers and row-count expectations
+- freeform typed-query cases
+- SQL visibility and parameterization checks
+- unsupported live/future/non-baseball questions
+- ambiguous player names
+- minimum sample size cases for AVG and ERA
+- source manifest requirements
+
+Current automated tests:
+
+```bash
+uv run pytest -q
+```
+
+The eval file is intentionally human-readable so it can drive a later test runner, CI report, or model-routing regression harness.
+
+## Why This Is Grounded
+
+Grounding is enforced in several places:
+
+- The router returns structured intent instead of prose.
+- Stat SQL only accepts registered stats; unsupported stats raise instead of falling through to raw column names.
+- Freeform SQL uses typed specs and bound parameters for model-supplied values.
+- DuckDB sources include rows and dataset manifest metadata.
+- Chroma answers are generated only after retrieving local corpus chunks; missing corpus context returns an unsupported response instead of an ungrounded answer.
+
+## Limitations
+
+- This is historical data, not a live MLB scoreboard, injury feed, betting model, salary database, or Statcast warehouse.
+- The corpus is intentionally small: useful for demonstrating retrieval and citation mechanics, not comprehensive baseball knowledge.
+- Some freeform database questions still depend on the local intent model producing a supported typed spec.
+- Lahman-style historical data can encode old team IDs and historical naming conventions that require careful interpretation.
+
+## Development
+
+```bash
+uv sync
+uv run python -m baseball_rag.db.download
+uv run python -m baseball_rag.corpus --static-only
+uv run pytest -q
+```
+
+Useful docs:
+
+- [API reference](docs/api.md)
+- [Architecture notes](docs/architecture.md)
+- [CLI notes](docs/cli.md)

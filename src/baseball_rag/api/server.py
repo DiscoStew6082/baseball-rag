@@ -31,3 +31,11 @@ def query(req: QueryRequest):
 
     result = answer(req.question)
     return QueryResponse(**result.to_dict())
+
+
+@app.get("/sources")
+def sources():
+    """Return dataset provenance used by DuckDB-backed answers."""
+    from baseball_rag.provenance import load_data_manifest
+
+    return load_data_manifest()

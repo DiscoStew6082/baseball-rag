@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 import gradio as gr
 
 from baseball_rag.cli import answer
+from baseball_rag.service import answer as answer_structured
 
 if TYPE_CHECKING:
     from baseball_rag.arch.diagram import ArchitectureDiagram
@@ -172,6 +173,20 @@ def respond(
     return result
 
 
+def respond_structured(message: str, *, diagram: "ArchitectureDiagram | None" = None):
+    """Return answer text, evidence rows, source metadata, and SQL for Gradio."""
+    if diagram is not None:
+        _trace_and_animate(diagram, message)
+
+    result = answer_structured(message)
+    payload = result.to_dict()
+    sources = payload["sources"]
+    primary_source = sources[0] if sources else {}
+    rows = primary_source.get("rows") or []
+    sql = primary_source.get("sql") or ""
+    return payload["answer"], rows, sources, sql
+
+
 # --------------------------------------------------------------------------
 # Dashboard builder
 # --------------------------------------------------------------------------
@@ -192,22 +207,41 @@ def build_dashboard() -> gr.Blocks:
         gr.Markdown("## ⚾ Baseball RAG — Query Engine & Architecture Explorer")
 
         with gr.Tab("Query"):
-            gr.Markdown(
-                "Ask about MLB history in natural language. "
-                "Every query is traced through the pipeline and visualized "
-                "in the **Architecture** tab."
+            with gr.Row():
+                question = gr.Textbox(
+                    label="Question",
+                    placeholder="who had the most RBIs in 1962",
+                    scale=4,
+                )
+                submit = gr.Button("Ask", variant="primary", scale=1)
+
+            with gr.Row():
+                example = gr.Examples(
+                    examples=[
+                        "who had the most RBIs in 1962",
+                        "career home run leaders",
+                        "who was Babe Ruth",
+                        "what is OPS",
+                        "who played for the Braves in 1936",
+                    ],
+                    inputs=question,
+                )
+                _ = example
+
+            answer_box = gr.Textbox(label="Answer", lines=8)
+            table = gr.Dataframe(label="Rows", interactive=False, wrap=True)
+            sources = gr.JSON(label="Sources")
+            sql = gr.Code(label="SQL", language="sql")
+
+            submit.click(
+                fn=lambda msg: respond_structured(msg, diagram=arch_diagram),
+                inputs=[question],
+                outputs=[answer_box, table, sources, sql],
             )
-            gr.ChatInterface(
-                fn=lambda msg, hist: respond(msg, hist, diagram=arch_diagram),
-                title="",
-                description="",
-                examples=[
-                    ["who had the most RBIs in 1962"],
-                    ["career home run leaders"],
-                    ["who was babe ruth"],
-                    ["what is a home run"],
-                    ["tell me about ted williams"],
-                ],
+            question.submit(
+                fn=lambda msg: respond_structured(msg, diagram=arch_diagram),
+                inputs=[question],
+                outputs=[answer_box, table, sources, sql],
             )
 
         with gr.Tab("Architecture"):

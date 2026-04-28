@@ -1,6 +1,8 @@
 """Structured answer and provenance models for grounded responses."""
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
 SourceType = Literal["duckdb", "chroma", "system"]
@@ -17,6 +19,7 @@ class SourceRecord:
     rows: list[dict[str, Any]] = field(default_factory=list)
     columns: list[str] = field(default_factory=list)
     score: float | None = None
+    data_manifest: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serializable source record."""
@@ -28,6 +31,7 @@ class SourceRecord:
             "rows": self.rows,
             "columns": self.columns,
             "score": self.score,
+            "data_manifest": self.data_manifest,
         }
 
 
@@ -50,3 +54,34 @@ class StructuredAnswer:
             "warnings": self.warnings,
             "unsupported": self.unsupported,
         }
+
+
+def manifest_path() -> Path:
+    """Return the project data manifest path."""
+    return Path(__file__).resolve().parents[2] / "data" / "manifest.json"
+
+
+def load_data_manifest() -> dict[str, Any]:
+    """Load the local dataset provenance manifest."""
+    with manifest_path().open(encoding="utf-8") as f:
+        return json.load(f)
+
+
+def compact_data_manifest() -> dict[str, Any]:
+    """Return the manifest fields most useful inside an answer source."""
+    manifest = load_data_manifest()
+    return {
+        "dataset": manifest.get("dataset", {}),
+        "download": manifest.get("download", {}),
+        "coverage": manifest.get("coverage", {}),
+        "files": [
+            {
+                "path": item.get("path"),
+                "table": item.get("table"),
+                "rows": item.get("rows"),
+                "year_coverage": item.get("year_coverage"),
+                "sha256": item.get("sha256"),
+            }
+            for item in manifest.get("files", [])
+        ],
+    }

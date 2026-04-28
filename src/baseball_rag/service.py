@@ -12,7 +12,7 @@ from baseball_rag.db import (
     init_db,
 )
 from baseball_rag.db.duckdb_schema import get_duckdb
-from baseball_rag.provenance import SourceRecord, StructuredAnswer
+from baseball_rag.provenance import SourceRecord, StructuredAnswer, compact_data_manifest
 from baseball_rag.retrieval.chroma_store import RetrievedChunk, retrieve
 from baseball_rag.routing import route
 from baseball_rag.routing.query_router import TimePeriod, TimePeriodType
@@ -181,6 +181,7 @@ def _answer_freeform(question: str, decision: Any) -> StructuredAnswer:
         sql=query_result.sql,
         columns=query_result.columns,
         rows=_rows_to_dicts(query_result.columns, query_result.rows[:100]),
+        data_manifest=compact_data_manifest(),
     )
 
     if query_result.row_count == 0:
@@ -286,6 +287,7 @@ def _duckdb_source(
         label=label,
         detail=f"Tables: {', '.join(tables)}. Dataset: local Hugging Face NeuML/baseballdata CSVs.",
         rows=rows or [],
+        data_manifest=compact_data_manifest(),
     )
 
 

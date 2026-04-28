@@ -96,7 +96,9 @@ Then added to ChromaDB with:
 
 ### 3. Retrieval
 
-At query time, ChromaDB performs cosine-similarity search over all corpus documents. Top-k results are passed to the prompt layer.
+At query time, ChromaDB performs cosine-similarity search over indexed corpus
+documents. Top-k results are passed to the prompt layer. Chroma's files under
+`data/` are generated local state; the durable source is this Markdown corpus.
 
 ### 4. Prompt Grounding (`generation/prompt.py`)
 
@@ -122,7 +124,7 @@ The LLM is instructed to cite sources explicitly: `[Source: HR.md]`.
 3. Rebuild the index:
 
 ```bash
-uv run python -m baseball_rag.corpus.ingest
+uv run python -m baseball_rag.corpus --static-only
 ```
 
 ### A new Hall of Fame bio
@@ -133,4 +135,10 @@ uv run python -m baseball_rag.corpus.ingest
 
 ## Current Corpus Size
 
-15 documents total (10 stat definitions + 5 HOF bios). The index is wiped and rebuilt on every run for reproducibility.
+15 checked-in Markdown documents total (10 stat definitions + 5 HOF bios). The
+index is wiped and rebuilt on every run for reproducibility. A larger
+experimental mode can also index generated player bios from DuckDB:
+
+```bash
+uv run python -m baseball_rag.corpus
+```

@@ -22,11 +22,11 @@ class TestAssembleSQL:
         )
         sql = _assemble_sql(intent)
 
-        assert "people" in sql.lower()
-        assert "batting" in sql.lower()
-        assert "teams" in sql.lower()
-        assert "1936" in sql
-        assert "braves" in sql.lower()
+        assert "people" in sql.sql.lower()
+        assert "batting" in sql.sql.lower()
+        assert "teams" in sql.sql.lower()
+        assert "?" in sql.sql
+        assert sql.params == ["%Braves%", 1936]
 
     def test_assembles_batting_and_pitching_union(self):
         from baseball_rag.db.freeform import QueryIntent, _assemble_sql
@@ -38,9 +38,9 @@ class TestAssembleSQL:
         )
         sql = _assemble_sql(intent)
 
-        assert "union" in sql.lower()
-        assert "batting" in sql.lower()
-        assert "pitching" in sql.lower()
+        assert "union" in sql.sql.lower()
+        assert "batting" in sql.sql.lower()
+        assert "pitching" in sql.sql.lower()
 
     def test_assembles_without_year(self):
         from baseball_rag.db.freeform import QueryIntent, _assemble_sql
@@ -48,9 +48,9 @@ class TestAssembleSQL:
         intent = QueryIntent(stat_tables=["batting"], team_name_pattern="Cubs")
         sql = _assemble_sql(intent)
 
-        assert "cubs" in sql.lower()
+        assert sql.params == ["%Cubs%"]
         # No year filter means no 1936 etc.
-        assert "yearid" not in sql.lower() or "BETWEEN" not in sql.upper()
+        assert "yearid" not in sql.sql.lower() or "BETWEEN" not in sql.sql.upper()
 
     def test_always_distinct(self):
         from baseball_rag.db.freeform import QueryIntent, _assemble_sql
@@ -63,7 +63,7 @@ class TestAssembleSQL:
         sql = _assemble_sql(intent)
 
         # DISTINCT must be present to avoid duplicate players appearing twice
-        assert "distinct" in sql.lower()
+        assert "distinct" in sql.sql.lower()
 
 
 class TestParseIntent:
