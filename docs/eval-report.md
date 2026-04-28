@@ -2,15 +2,15 @@
 
 - Command: `python -m evals.questions --report docs/eval-report.md`
 - Mode: answer
-- Cases loaded: 61
-- Attempted: 10
-- Passed: 10
+- Cases loaded: 68
+- Attempted: 20
+- Passed: 20
 - Failed: 0
-- Skipped: 51
+- Skipped: 48
 
 ## Service Requirements
 
-- Deterministic/CI-safe mode was used; non-default cases were skipped. 51 case(s) are available behind `--include-live`; 28 skipped case(s) may require Chroma, corpus, and LLM services.
+- Deterministic/CI-safe mode was used; non-default cases were skipped. 48 case(s) are available behind `--include-live`; 25 skipped case(s) may require Chroma, corpus, and LLM services.
 
 ## Suite Coverage
 

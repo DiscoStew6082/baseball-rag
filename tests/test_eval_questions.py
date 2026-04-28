@@ -167,6 +167,32 @@ def test_validate_case_checks_core_expectations():
     assert failures == []
 
 
+def test_validate_case_checks_expected_rows_and_parameterized_sql():
+    base = load_cases()[0]
+    case = base.__class__(
+        id="row_match",
+        question="500 home run club",
+        spec={
+            "id": "row_match",
+            "question": "500 home run club",
+            "intent": "freeform_query",
+            "expected_sql_parameterized": True,
+            "expected_rows": [{"nameFirst": "Babe", "nameLast": "Ruth", "career_HR": 714}],
+        },
+    )
+
+    failures = validate_case(
+        case,
+        _answer(
+            answer="Babe Ruth had 714 career HR",
+            intent="freeform_query",
+            rows=[{"nameFirst": "Babe", "nameLast": "Ruth", "career_HR": 714}],
+        ),
+    )
+
+    assert failures == []
+
+
 def test_validate_case_reports_mismatches():
     case = load_cases()[0]
 

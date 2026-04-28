@@ -499,7 +499,42 @@ def validate_case(case: EvalCase, answer: StructuredAnswer) -> list[str]:
         if not any(source.sql and str(needle) in source.sql for source in answer.sources):
             failures.append(f"SQL missing substring {needle!r}")
 
+    if spec.get("expected_sql_parameterized") and not any(
+        source.sql and "?" in source.sql for source in answer.sources
+    ):
+        failures.append("expected parameterized SQL with bound placeholders")
+
+    for expected_row in spec.get("expected_rows", []) or []:
+        if not isinstance(expected_row, dict):
+            failures.append(f"expected row must be a mapping, got {expected_row!r}")
+            continue
+        if not _source_rows_contain(answer, expected_row):
+            failures.append(f"source rows missing expected row {expected_row!r}")
+
     return failures
+
+
+def _source_rows_contain(answer: StructuredAnswer, expected: dict[str, Any]) -> bool:
+    """Return True when any source row contains all expected key/value pairs."""
+    for source in answer.sources:
+        for row in source.rows:
+            if all(_row_value_matches(row.get(key), value) for key, value in expected.items()):
+                return True
+    return False
+
+
+def _row_value_matches(actual: Any, expected: Any) -> bool:
+    if isinstance(expected, float):
+        try:
+            return abs(float(actual) - expected) < 0.000001
+        except (TypeError, ValueError):
+            return False
+    if isinstance(expected, int) and not isinstance(expected, bool):
+        try:
+            return int(actual) == expected
+        except (TypeError, ValueError):
+            return False
+    return _normalized_text(str(actual)) == _normalized_text(str(expected))
 
 
 def validate_retrieved_chunks(case: EvalCase, chunks: list[RetrievedChunk]) -> list[str]:
