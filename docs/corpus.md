@@ -100,6 +100,11 @@ At query time, ChromaDB performs cosine-similarity search over indexed corpus
 documents. Top-k results are passed to the prompt layer. Chroma's files under
 `data/` are generated local state; the durable source is this Markdown corpus.
 
+For generated player profiles, player-name questions first resolve the local
+`playerID` from DuckDB. Retrieval then applies a Chroma metadata filter such as
+`where={"player_id": "ruthba01"}` before falling back to semantic search. This
+keeps ambiguous names from silently retrieving the wrong player.
+
 ### 4. Prompt Grounding (`generation/prompt.py`)
 
 Retrieved chunks appear in the prompt as:
@@ -141,4 +146,25 @@ experimental mode can also index generated player bios from DuckDB:
 
 ```bash
 uv run python -m baseball_rag.corpus
+```
+
+Full player-profile builds also write `data/corpus_manifest.json`. That file is
+generated and ignored by git. It records the Chroma collection name, static docs,
+generated player profile count, document IDs, `player_id`, title, doc kind, and
+source tables used to produce each profile.
+
+Generated player profiles use frontmatter like:
+
+```yaml
+---
+title: Babe Ruth
+player_id: ruthba01
+category: player_biography
+doc_kind: generated_player_profile
+source_tables:
+  - people
+  - batting
+  - pitching
+  - fielding
+---
 ```

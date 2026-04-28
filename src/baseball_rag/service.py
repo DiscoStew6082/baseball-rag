@@ -114,8 +114,39 @@ def _answer_stat_query(question: str, decision: Any) -> StructuredAnswer:
 
 
 def _answer_player_biography(question: str, decision: Any) -> StructuredAnswer:
+    player_name = decision.player_name or question
+    resolved_player_id: str | None = None
+    if decision.player_name:
+        from baseball_rag.corpus.player_bios import resolve_player_by_name
+
+        resolution = resolve_player_by_name(decision.player_name, get_duckdb())
+        if resolution.ambiguous:
+            choices = ", ".join(
+                f"{c.full_name} ({c.debut or '?'}-{c.final_game or '?'})"
+                for c in resolution.candidates[:5]
+            )
+            return StructuredAnswer(
+                answer=(
+                    f"'{decision.player_name}' is ambiguous in the local player registry. "
+                    f"Try a fuller name. Possible matches: {choices}."
+                ),
+                intent=decision.intent,
+                warnings=["No biography was generated because the player name was ambiguous."],
+                unsupported=True,
+            )
+        resolved_player_id = resolution.player_id
+
     try:
-        chunks = retrieve(decision.player_name or question, top_k=3)
+        if resolved_player_id:
+            chunks = retrieve(
+                player_name,
+                top_k=1,
+                where={"player_id": resolved_player_id},
+            )
+            if not chunks:
+                chunks = retrieve(player_name, top_k=3)
+        else:
+            chunks = retrieve(player_name, top_k=3)
     except Exception as e:  # noqa: BLE001 - Chroma errors vary by installed version
         if "NotFoundError" in type(e).__name__ or "not found" in str(e).lower():
             return StructuredAnswer(
@@ -140,7 +171,7 @@ def _answer_player_biography(question: str, decision: Any) -> StructuredAnswer:
     if not chunks:
         return StructuredAnswer(
             answer=(
-                f"No player biography found for '{decision.player_name}'. "
+                f"No player biography found for '{decision.player_name or question}'. "
                 "The player may not be in the corpus or the corpus may need re-indexing."
             ),
             intent=decision.intent,
@@ -292,12 +323,14 @@ def _duckdb_source(
 
 
 def _chroma_source(chunk: RetrievedChunk) -> SourceRecord:
+    manifest = compact_data_manifest() if chunk.doc_kind == "generated_player_profile" else None
     return SourceRecord(
         type="chroma",
         label=chunk.title,
         detail=chunk.source,
         rows=[{"text": chunk.text}],
         score=chunk.score,
+        data_manifest=manifest,
     )
 
 

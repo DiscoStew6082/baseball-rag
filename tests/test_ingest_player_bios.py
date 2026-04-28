@@ -1,5 +1,6 @@
 """Tests for player bio ingestion into ChromaDB."""
 
+import json
 from unittest.mock import MagicMock, patch
 
 
@@ -131,3 +132,42 @@ class TestIngestPlayerBios:
             assert meta.get("category") == "player_biography", (
                 f"Expected category 'player_biography', got {meta}"
             )
+
+    def test_build_index_writes_generated_corpus_manifest(self, tmp_path):
+        """Full player indexing should record a generated corpus manifest."""
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value.fetchall.return_value = [("ruthba01",)]
+        bio = """---
+title: Babe Ruth
+player_id: ruthba01
+category: player_biography
+doc_kind: generated_player_profile
+source_tables:
+  - people
+  - batting
+  - pitching
+  - fielding
+---
+# Babe Ruth
+"""
+
+        with patch("baseball_rag.corpus.ingest.get_duckdb", return_value=mock_conn):
+            with patch("baseball_rag.corpus.ingest.build_player_bio", return_value=bio):
+                with patch(
+                    "baseball_rag.corpus.ingest.chromadb.PersistentClient"
+                ) as mock_client_class:
+                    mock_collection = MagicMock()
+                    mock_client_class.return_value.create_collection.return_value = mock_collection
+
+                    from baseball_rag.corpus.ingest import build_index
+
+                    with patch("baseball_rag.corpus.ingest.get_stat_defs", return_value=[]):
+                        with patch("baseball_rag.corpus.ingest.get_hof_bios", return_value=[]):
+                            build_index(tmp_path)
+
+        manifest_path = tmp_path / "corpus_manifest.json"
+        assert manifest_path.exists()
+        manifest = json.loads(manifest_path.read_text())
+        assert manifest["collection_name"] == "baseball_corpus"
+        assert manifest["generated_player_profiles"]["count"] == 1
+        assert manifest["generated_player_profiles"]["documents"][0]["player_id"] == "ruthba01"

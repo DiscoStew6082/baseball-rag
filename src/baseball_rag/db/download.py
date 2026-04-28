@@ -147,12 +147,18 @@ def _csv_metadata(path: Path) -> tuple[int, dict[str, int] | None]:
         header = next(reader)
     conn = duckdb.connect()
     try:
-        row_count = conn.execute(f"SELECT count(*) FROM read_csv_auto('{path}')").fetchone()[0]
+        row_count_result = conn.execute(f"SELECT count(*) FROM read_csv_auto('{path}')").fetchone()
+        if row_count_result is None:
+            raise RuntimeError(f"Could not count rows in {path}")
+        row_count = row_count_result[0]
         if "yearID" not in header:
             return int(row_count), None
-        min_year, max_year = conn.execute(
+        year_result = conn.execute(
             f"SELECT min(yearID), max(yearID) FROM read_csv_auto('{path}')"
         ).fetchone()
+        if year_result is None:
+            raise RuntimeError(f"Could not compute year coverage for {path}")
+        min_year, max_year = year_result
         return int(row_count), {"min": int(min_year), "max": int(max_year)}
     finally:
         conn.close()
