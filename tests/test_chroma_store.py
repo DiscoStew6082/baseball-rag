@@ -107,6 +107,41 @@ class TestChromaStore:
         assert results[0].player_id == "ruthba01"
         assert results[0].doc_kind == "generated_player_profile"
 
+    def test_metadata_filter_bypasses_relevance_threshold(self, monkeypatch, tmp_path):
+        """Exact metadata matches should not be discarded by semantic score threshold."""
+        from unittest.mock import MagicMock
+
+        from baseball_rag.retrieval import chroma_store
+
+        mock_collection = MagicMock()
+        mock_collection.query.return_value = {
+            "ids": [["player:ruthba01"]],
+            "documents": [["# Babe Ruth\n\nGenerated profile"]],
+            "metadatas": [
+                [
+                    {
+                        "source": "ruthba01.md",
+                        "category": "player_biography",
+                        "title": "Babe Ruth",
+                        "player_id": "ruthba01",
+                        "doc_kind": "generated_player_profile",
+                    }
+                ]
+            ],
+            "distances": [[1.8]],
+        }
+        monkeypatch.setattr(chroma_store, "get_store", lambda _persist_dir: mock_collection)
+
+        results = retrieve(
+            "Babe Ruth",
+            top_k=1,
+            persist_dir=tmp_path,
+            where={"player_id": "ruthba01"},
+        )
+
+        assert len(results) == 1
+        assert results[0].player_id == "ruthba01"
+
 
 class TestRelevanceThreshold:
     """Tests for relevance threshold — low-scoring retrievals should return empty."""
