@@ -8,9 +8,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from baseball_rag.provenance import StructuredAnswer
+from baseball_rag.retrieval.strategies import available_strategy_names
 
 AnswerFn = Callable[[str], StructuredAnswer]
 
@@ -58,6 +59,12 @@ class EvalCase:
             and not self.requires_live_services()
         )
 
+    def is_retrieval_strategy_case(self) -> bool:
+        """Return True when retrieval strategy choice can affect this case."""
+        if self.required_sources & LIVE_SOURCE_TYPES:
+            return True
+        return self.intent in {"player_biography", "general_explanation"}
+
 
 @dataclass
 class EvalCaseResult:
@@ -86,6 +93,17 @@ class EvalRunResult:
         return len(self.passed) + len(self.failed)
 
 
+@dataclass
+class StrategyRunResult:
+    """Aggregate outcomes keyed by retrieval strategy name."""
+
+    by_strategy: dict[str, EvalRunResult] = field(default_factory=dict)
+
+    @property
+    def ok(self) -> bool:
+        return all(result.ok for result in self.by_strategy.values())
+
+
 def load_cases(path: Path = DEFAULT_QUESTIONS_PATH) -> list[EvalCase]:
     """Load eval cases from the YAML manifest."""
     with path.open(encoding="utf-8") as f:
@@ -112,6 +130,11 @@ def load_cases(path: Path = DEFAULT_QUESTIONS_PATH) -> list[EvalCase]:
 def selected_cases(cases: list[EvalCase], *, include_live: bool = False) -> list[EvalCase]:
     """Return cases runnable under the selected service constraints."""
     return [case for case in cases if case.should_run(include_live=include_live)]
+
+
+def selected_strategy_cases(cases: list[EvalCase]) -> list[EvalCase]:
+    """Return cases where retrieval strategy choice can affect the outcome."""
+    return [case for case in cases if case.is_retrieval_strategy_case()]
 
 
 def run_cases(
@@ -156,6 +179,55 @@ def run_cases(
         else:
             result.passed.append(case_result)
     return result
+
+
+def run_strategy_cases(
+    cases: list[EvalCase],
+    *,
+    strategies: list[str] | None = None,
+    answer_factory: Callable[[str], AnswerFn] | None = None,
+    include_live: bool = False,
+) -> dict[str, EvalRunResult]:
+    """Run the same cases once per retrieval strategy."""
+    strategy_names = strategies or available_strategy_names()
+    strategy_cases = selected_strategy_cases(cases)
+    if answer_factory is None:
+
+        def answer_factory(strategy: str) -> AnswerFn:
+            from baseball_rag.service import answer as service_answer
+
+            def answer_with_strategy(question: str) -> StructuredAnswer:
+                return service_answer(question, retrieval_strategy=strategy)
+
+            return answer_with_strategy
+
+    result: dict[str, EvalRunResult] = {}
+    for strategy in strategy_names:
+        result[strategy] = run_cases(
+            strategy_cases,
+            answer_fn=answer_factory(strategy),
+            include_live=include_live,
+        )
+    return result
+
+
+def format_strategy_summary(result: StrategyRunResult | dict[str, EvalRunResult]) -> str:
+    """Render a fixed-width strategy comparison table."""
+    by_strategy = result.by_strategy if isinstance(result, StrategyRunResult) else result
+    rows = [
+        (
+            strategy,
+            len(run_result.passed),
+            len(run_result.failed),
+            len(run_result.skipped),
+        )
+        for strategy, run_result in by_strategy.items()
+    ]
+    strategy_width = max([len("strategy"), *(len(row[0]) for row in rows)])
+    lines = [f"{'strategy':<{strategy_width}}  {'passed':>6}  {'failed':>6}  {'skipped':>7}"]
+    for strategy, passed, failed, skipped in rows:
+        lines.append(f"{strategy:<{strategy_width}}  {passed:>6}  {failed:>6}  {skipped:>7}")
+    return "\n".join(lines)
 
 
 def validate_case(case: EvalCase, answer: StructuredAnswer) -> list[str]:
@@ -229,9 +301,40 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="also run cases that may require LLM or Chroma services",
     )
+    parser.add_argument(
+        "--strategy",
+        choices=available_strategy_names(),
+        default=None,
+        help="run Chroma-backed evals with one retrieval strategy",
+    )
+    parser.add_argument(
+        "--all-strategies",
+        action="store_true",
+        help="run evals once for each retrieval strategy and print a comparison table",
+    )
     args = parser.parse_args(argv)
 
-    result = run_cases(load_cases(args.questions), include_live=args.include_live)
+    cases = load_cases(args.questions)
+    if args.all_strategies:
+        strategy_result = StrategyRunResult(
+            run_strategy_cases(cases, include_live=args.include_live)
+        )
+        print(format_strategy_summary(strategy_result))
+        for strategy, result in strategy_result.by_strategy.items():
+            for failed in result.failed:
+                print(f"- {strategy}/{failed.case_id}: " + "; ".join(failed.failures))
+        return 0 if strategy_result.ok else 1
+
+    answer_fn: AnswerFn | None = None
+    if args.strategy:
+        from baseball_rag.service import answer as service_answer
+
+        def answer_with_strategy(question: str) -> StructuredAnswer:
+            return service_answer(question, retrieval_strategy=args.strategy)
+
+        answer_fn = answer_with_strategy
+
+    result = run_cases(cases, answer_fn=answer_fn, include_live=args.include_live)
     print(
         f"evals: {len(result.passed)} passed, {len(result.failed)} failed, "
         f"{len(result.skipped)} skipped"

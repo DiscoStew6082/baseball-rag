@@ -164,6 +164,34 @@ questions:
     intent: player_biography
     expected_answer_contains: ["Mickey Mantle"]
     required_sources: ["chroma"]
+  - id: strategy_generated_player_wally_pipp
+    question: "who was Wally Pipp"
+    intent: player_biography
+    expected_answer_contains: ["Wally Pipp"]
+    required_sources: ["chroma"]
+    notes: "Generated-only profile that exact/hybrid should find by player_id when the indexed player corpus exists."
+  - id: strategy_generated_player_matt_olson
+    question: "tell me about Matt Olson"
+    intent: player_biography
+    expected_answer_contains: ["Matt Olson"]
+    required_sources: ["chroma"]
+    notes: "Modern non-HOF generated profile that semantic-only retrieval may miss without a full player corpus."
+  - id: strategy_partial_name_acuna
+    question: "tell me about Ronald Acuna"
+    intent: player_biography
+    expected_answer_contains: ["Acuna"]
+    required_sources: ["chroma"]
+    notes: "Partial name without suffix should still resolve to the generated player profile."
+  - id: strategy_ambiguous_surname_smith
+    question: "who was Smith"
+    expected_unsupported: true
+    notes: "Safety/routing eval: last-name-only query should be rejected before any retrieval strategy can retrieve an arbitrary Smith profile."
+  - id: strategy_broad_bio_query_yankees_slugger
+    question: "which indexed player biography talks about a Yankees switch-hitting slugger"
+    intent: general_explanation
+    expected_answer_contains: ["Yankees"]
+    required_sources: ["chroma"]
+    notes: "Broad semantic biography question where exact-player-id should have no player_id to filter on."
   - id: stat_definition_ops
     question: "what is OPS"
     intent: general_explanation

@@ -54,6 +54,43 @@ class TestPlayerBioQuery:
                 where={"player_id": "pippwa01"},
             )
 
+    def test_player_biography_can_use_semantic_strategy_without_metadata_filter(self):
+        """Strategy selection should let evals compare semantic-only retrieval."""
+        mock_chunk = RetrievedChunk(
+            text="Wally Pipp was a first baseman.",
+            source="/path/to/pipp.md",
+            title="Wally Pipp",
+            score=0.95,
+        )
+
+        with (
+            patch("baseball_rag.service.route") as mock_route,
+            patch("baseball_rag.service.retrieve") as mock_retrieve,
+            patch("baseball_rag.service.get_duckdb"),
+            patch("baseball_rag.corpus.player_bios.resolve_player_by_name") as mock_resolve,
+            patch("baseball_rag.service.init_db"),
+        ):
+            from baseball_rag.routing import RouteResult
+            from baseball_rag.service import answer as structured_answer
+
+            mock_route.return_value = RouteResult(
+                intent="player_biography",
+                stat=None,
+                time_period=None,
+                position=None,
+                player_name="Wally Pipp",
+                raw_question="who was Wally Pipp",
+            )
+            mock_retrieve.return_value = [mock_chunk]
+            mock_resolve.return_value = PlayerResolution(
+                query="Wally Pipp",
+                candidates=[PlayerCandidate("pippwa01", "Wally Pipp", "1913-06-29", "1928-09-30")],
+            )
+
+            structured_answer("who was Wally Pipp", retrieval_strategy="semantic_chroma")
+
+            mock_retrieve.assert_called_with("Wally Pipp", top_k=3, where=None)
+
     def test_player_biography_uses_bio_prompt(self):
         """Player biography path should use build_player_bio_prompt, not explanation prompt."""
         mock_chunk = RetrievedChunk(

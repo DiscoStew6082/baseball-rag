@@ -14,13 +14,18 @@ from baseball_rag.db import (
 from baseball_rag.db.duckdb_schema import get_duckdb
 from baseball_rag.provenance import SourceRecord, StructuredAnswer, compact_data_manifest
 from baseball_rag.retrieval.chroma_store import RetrievedChunk, retrieve
+from baseball_rag.retrieval.strategies import RetrievalStrategy, get_strategy
 from baseball_rag.routing import route
 from baseball_rag.routing.query_router import TimePeriod, TimePeriodType
 
 logger = logging.getLogger(__name__)
 
 
-def answer(question: str) -> StructuredAnswer:
+def answer(
+    question: str,
+    *,
+    retrieval_strategy: str | RetrievalStrategy | None = None,
+) -> StructuredAnswer:
     """Answer a question with explicit grounding metadata."""
     init_db()
     decision = route(question)
@@ -28,10 +33,10 @@ def answer(question: str) -> StructuredAnswer:
     if decision.intent == "stat_query":
         return _answer_stat_query(question, decision)
     if decision.intent == "player_biography":
-        return _answer_player_biography(question, decision)
+        return _answer_player_biography(question, decision, retrieval_strategy=retrieval_strategy)
     if decision.intent == "freeform_query":
         return _answer_freeform(question, decision)
-    return _answer_general(question, decision)
+    return _answer_general(question, decision, retrieval_strategy=retrieval_strategy)
 
 
 def render_text(result: StructuredAnswer) -> str:
@@ -113,7 +118,12 @@ def _answer_stat_query(question: str, decision: Any) -> StructuredAnswer:
     )
 
 
-def _answer_player_biography(question: str, decision: Any) -> StructuredAnswer:
+def _answer_player_biography(
+    question: str,
+    decision: Any,
+    *,
+    retrieval_strategy: str | RetrievalStrategy | None = None,
+) -> StructuredAnswer:
     player_name = decision.player_name or question
     resolved_player_id: str | None = None
     if decision.player_name:
@@ -137,16 +147,13 @@ def _answer_player_biography(question: str, decision: Any) -> StructuredAnswer:
         resolved_player_id = resolution.player_id
 
     try:
-        if resolved_player_id:
-            chunks = retrieve(
-                player_name,
-                top_k=1,
-                where={"player_id": resolved_player_id},
-            )
-            if not chunks:
-                chunks = retrieve(player_name, top_k=3)
-        else:
-            chunks = retrieve(player_name, top_k=3)
+        strategy = _resolve_retrieval_strategy(retrieval_strategy, default="hybrid_player_bio")
+        chunks = strategy.retrieve(
+            decision.raw_question,
+            top_k=3,
+            player_name=player_name,
+            player_id=resolved_player_id,
+        )
     except Exception as e:  # noqa: BLE001 - Chroma errors vary by installed version
         if "NotFoundError" in type(e).__name__ or "not found" in str(e).lower():
             return StructuredAnswer(
@@ -237,9 +244,15 @@ def _answer_freeform(question: str, decision: Any) -> StructuredAnswer:
     )
 
 
-def _answer_general(question: str, decision: Any) -> StructuredAnswer:
+def _answer_general(
+    question: str,
+    decision: Any,
+    *,
+    retrieval_strategy: str | RetrievalStrategy | None = None,
+) -> StructuredAnswer:
     try:
-        chunks = retrieve(question, top_k=3)
+        strategy = _resolve_retrieval_strategy(retrieval_strategy, default="semantic_chroma")
+        chunks = strategy.retrieve(question, top_k=3)
     except Exception as e:  # noqa: BLE001 - Chroma errors vary by installed version
         if "NotFoundError" in type(e).__name__ or "not found" in str(e).lower():
             return StructuredAnswer(
@@ -341,3 +354,15 @@ def _rows_to_dicts(columns: list[str], rows: list[tuple]) -> list[dict[str, Any]
 def _is_recoverable_chroma_index_error(exc: Exception) -> bool:
     message = str(exc).lower()
     return "dimension" in message or "embedding" in message
+
+
+def _resolve_retrieval_strategy(
+    strategy: str | RetrievalStrategy | None,
+    *,
+    default: str,
+) -> RetrievalStrategy:
+    if strategy is None:
+        return get_strategy(default, retrieve_fn=retrieve)
+    if isinstance(strategy, str):
+        return get_strategy(strategy, retrieve_fn=retrieve)
+    return strategy
