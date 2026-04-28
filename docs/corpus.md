@@ -7,6 +7,7 @@ The corpus is the knowledge base that grounds LLM responses in factual baseball 
 ```
 corpus/
 ├── __init__.py              # Path constants + helpers: get_stat_defs(), get_hof_bios()
+├── diagnostics.py           # Index/manifest/environment diagnostics
 ├── frontmatter.py           # YAML frontmatter parser
 ├── ingest.py                # ChromaDB index builder (build_index)
 ├── stat_definitions/        # 10 markdown files — one per stat
@@ -168,3 +169,41 @@ source_tables:
   - fielding
 ---
 ```
+
+## Diagnostics
+
+Print corpus diagnostics as JSON:
+
+```bash
+uv run python -m baseball_rag.corpus diagnostics --persist-dir data
+```
+
+The report includes:
+
+- resolved `persist_dir`
+- checked-in static corpus counts and file stems
+- Chroma collection existence and indexed count
+- Chroma metadata counts by `category` and `doc_kind`
+- `corpus_manifest.json` presence, generated timestamp, and document counts
+- `CHROMA_PERSIST_DIR`, `LMSTUDIO_BASE_URL`, and `LMSTUDIO_EMBEDDING_MODEL` hints
+
+Diagnostics do not require a healthy index. Missing directories, missing
+collections, missing manifests, and corrupt manifests are reported in the JSON
+instead of raising.
+
+During a full ingest, keep a second terminal open and run the same diagnostics
+command against the target persist directory. Early or interrupted builds may
+show a collection without a final manifest, or a manifest whose generated-player
+count is still zero; that is expected until ingest finishes.
+
+## Retrieval Strategy Benchmark
+
+After building the full player-profile index, compare Chroma-backed retrieval
+strategies without changing the corpus:
+
+```bash
+uv run python -m evals.questions --all-strategies --retrieval-only
+```
+
+This runs only eval cases where retrieval strategy can affect the answer and
+prints a per-strategy pass/fail/skip summary.

@@ -11,14 +11,18 @@ from typing import Any, Callable
 import yaml  # type: ignore[import-untyped]
 
 from baseball_rag.provenance import StructuredAnswer
-from baseball_rag.retrieval.strategies import available_strategy_names
+from baseball_rag.retrieval.chroma_store import RetrievedChunk, retrieve
+from baseball_rag.retrieval.strategies import available_strategy_names, get_strategy
 
 AnswerFn = Callable[[str], StructuredAnswer]
+RouteFn = Callable[[str], Any]
+PlayerResolverFn = Callable[[str], Any]
 
 
 DEFAULT_QUESTIONS_PATH = Path(__file__).with_name("questions.yaml")
 LIVE_SOURCE_TYPES = {"chroma"}
 LIVE_INTENTS = {"freeform_query", "player_biography", "general_explanation"}
+RETRIEVAL_CATEGORIES = {"player_biography", "general_explanation"}
 
 
 @dataclass(frozen=True)
@@ -42,6 +46,16 @@ class EvalCase:
     def ci_safe(self) -> bool:
         return bool(self.spec.get("ci_safe", False))
 
+    @property
+    def retrieval_category(self) -> str | None:
+        category = self.spec.get("retrieval_category") or self.intent
+        return str(category) if category is not None else None
+
+    @property
+    def player_name(self) -> str | None:
+        player_name = self.spec.get("player_name")
+        return str(player_name) if player_name is not None else None
+
     def requires_live_services(self) -> bool:
         """Return True when the case is expected to need LLM or live Chroma."""
         if self.required_sources & LIVE_SOURCE_TYPES:
@@ -61,6 +75,10 @@ class EvalCase:
 
     def is_retrieval_strategy_case(self) -> bool:
         """Return True when retrieval strategy choice can affect this case."""
+        if bool(self.spec.get("expected_unsupported", False)):
+            return False
+        if self.retrieval_category in RETRIEVAL_CATEGORIES:
+            return True
         if self.required_sources & LIVE_SOURCE_TYPES:
             return True
         return self.intent in {"player_biography", "general_explanation"}
@@ -102,6 +120,18 @@ class StrategyRunResult:
     @property
     def ok(self) -> bool:
         return all(result.ok for result in self.by_strategy.values())
+
+
+@dataclass
+class RetrievalCaseResult(EvalCaseResult):
+    """Outcome for one retrieval-only strategy/case attempt."""
+
+    strategy: str | None = None
+    category: str | None = None
+    route_intent: str | None = None
+    player_name: str | None = None
+    player_id: str | None = None
+    retrieved_count: int = 0
 
 
 def load_cases(path: Path = DEFAULT_QUESTIONS_PATH) -> list[EvalCase]:
@@ -211,6 +241,86 @@ def run_strategy_cases(
     return result
 
 
+def run_retrieval_strategy_cases(
+    cases: list[EvalCase],
+    *,
+    strategies: list[str] | None = None,
+    route_fn: RouteFn | None = None,
+    player_resolver_fn: PlayerResolverFn | None = None,
+    retrieve_fn: Callable[..., list[RetrievedChunk]] = retrieve,
+    persist_dir: Path | None = None,
+    top_k: int = 3,
+) -> dict[str, EvalRunResult]:
+    """Run retrieval-only evals once per strategy without service.answer or LLM answers."""
+    if route_fn is None:
+        from baseball_rag.routing import route as route_query
+
+        route_fn = route_query
+
+    result: dict[str, EvalRunResult] = {}
+    for strategy_name in strategies or available_strategy_names():
+        strategy = get_strategy(strategy_name, retrieve_fn=retrieve_fn)
+        run_result = EvalRunResult()
+        for case in selected_strategy_cases(cases):
+            try:
+                decision = _retrieval_decision_for_case(case, route_fn=route_fn)
+                category = _retrieval_category_for_case(case, decision)
+                player_name = getattr(decision, "player_name", None)
+                player_id = _resolve_player_id_for_retrieval_eval(
+                    decision,
+                    player_resolver_fn=player_resolver_fn,
+                )
+
+                if not strategy.is_applicable(category=category, player_id=player_id):
+                    run_result.skipped.append(
+                        RetrievalCaseResult(
+                            case_id=case.id,
+                            status="skipped",
+                            reason=_strategy_skip_reason(strategy.metadata, category, player_id),
+                            strategy=strategy.name,
+                            category=category,
+                            route_intent=getattr(decision, "intent", None),
+                            player_name=player_name,
+                            player_id=player_id,
+                        )
+                    )
+                    continue
+
+                chunks = strategy.retrieve(
+                    getattr(decision, "raw_question", None) or case.question,
+                    top_k=top_k,
+                    persist_dir=persist_dir,
+                    player_name=player_name,
+                    player_id=player_id,
+                )
+                failures = validate_retrieved_chunks(case, chunks)
+                case_result = RetrievalCaseResult(
+                    case_id=case.id,
+                    status="failed" if failures else "passed",
+                    failures=failures,
+                    strategy=strategy.name,
+                    category=category,
+                    route_intent=getattr(decision, "intent", None),
+                    player_name=player_name,
+                    player_id=player_id,
+                    retrieved_count=len(chunks),
+                )
+            except Exception as exc:  # noqa: BLE001 - evals should report all case failures
+                case_result = RetrievalCaseResult(
+                    case_id=case.id,
+                    status="failed",
+                    failures=[f"{type(exc).__name__}: {exc}"],
+                    strategy=strategy.name,
+                )
+
+            if case_result.failures:
+                run_result.failed.append(case_result)
+            else:
+                run_result.passed.append(case_result)
+        result[strategy.name] = run_result
+    return result
+
+
 def format_strategy_summary(result: StrategyRunResult | dict[str, EvalRunResult]) -> str:
     """Render a fixed-width strategy comparison table."""
     by_strategy = result.by_strategy if isinstance(result, StrategyRunResult) else result
@@ -220,13 +330,22 @@ def format_strategy_summary(result: StrategyRunResult | dict[str, EvalRunResult]
             len(run_result.passed),
             len(run_result.failed),
             len(run_result.skipped),
+            sum(
+                getattr(case_result, "retrieved_count", 0)
+                for case_result in run_result.passed + run_result.failed
+            ),
         )
         for strategy, run_result in by_strategy.items()
     ]
     strategy_width = max([len("strategy"), *(len(row[0]) for row in rows)])
-    lines = [f"{'strategy':<{strategy_width}}  {'passed':>6}  {'failed':>6}  {'skipped':>7}"]
-    for strategy, passed, failed, skipped in rows:
-        lines.append(f"{strategy:<{strategy_width}}  {passed:>6}  {failed:>6}  {skipped:>7}")
+    lines = [
+        f"{'strategy':<{strategy_width}}  {'passed':>6}  {'failed':>6}  "
+        f"{'skipped':>7}  {'chunks':>6}"
+    ]
+    for strategy, passed, failed, skipped, chunks in rows:
+        lines.append(
+            f"{strategy:<{strategy_width}}  {passed:>6}  {failed:>6}  {skipped:>7}  {chunks:>6}"
+        )
     return "\n".join(lines)
 
 
@@ -282,6 +401,114 @@ def validate_case(case: EvalCase, answer: StructuredAnswer) -> list[str]:
     return failures
 
 
+def validate_retrieved_chunks(case: EvalCase, chunks: list[RetrievedChunk]) -> list[str]:
+    """Validate YAML retrieval expectations against raw retrieved chunks."""
+    failures: list[str] = []
+    spec = case.spec
+
+    if "chroma" in case.required_sources and not chunks:
+        failures.append("retrieval returned no chunks")
+
+    combined_text = _normalized_text(
+        "\n".join(
+            " ".join(
+                str(value)
+                for value in (
+                    chunk.title,
+                    chunk.text,
+                    chunk.source,
+                    chunk.category,
+                    chunk.player_id,
+                    chunk.doc_kind,
+                )
+                if value
+            )
+            for chunk in chunks
+        )
+    )
+    needles = []
+    seen_needles = set()
+    for needle in list(spec.get("expected_retrieved_contains", []) or []) + list(
+        spec.get("expected_answer_contains", []) or []
+    ):
+        normalized_needle = _normalized_text(str(needle))
+        if normalized_needle in seen_needles:
+            continue
+        seen_needles.add(normalized_needle)
+        needles.append(needle)
+
+    for needle in needles:
+        if _normalized_text(str(needle)) not in combined_text:
+            failures.append(f"retrieved chunks missing substring {needle!r}")
+
+    for needle in spec.get("expected_retrieved_title_contains", []) or []:
+        if not any(
+            _normalized_text(str(needle)) in _normalized_text(chunk.title) for chunk in chunks
+        ):
+            failures.append(f"retrieved chunk titles missing substring {needle!r}")
+
+    expected_player_id = spec.get("expected_player_id")
+    if expected_player_id is not None and not any(
+        chunk.player_id == str(expected_player_id) for chunk in chunks
+    ):
+        failures.append(f"retrieved chunks missing player_id {expected_player_id!r}")
+
+    expected_doc_kind = spec.get("expected_doc_kind")
+    if expected_doc_kind is not None and not any(
+        chunk.doc_kind == str(expected_doc_kind) for chunk in chunks
+    ):
+        failures.append(f"retrieved chunks missing doc_kind {expected_doc_kind!r}")
+
+    return failures
+
+
+def _retrieval_category_for_case(case: EvalCase, decision: Any) -> str:
+    category = case.retrieval_category or getattr(decision, "intent", None)
+    if category is None:
+        return "general_explanation"
+    return str(category)
+
+
+def _retrieval_decision_for_case(case: EvalCase, *, route_fn: RouteFn) -> Any:
+    if case.intent is not None and case.retrieval_category is not None:
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            intent=case.intent,
+            player_name=case.player_name,
+            raw_question=case.question,
+        )
+    return route_fn(case.question)
+
+
+def _resolve_player_id_for_retrieval_eval(
+    decision: Any,
+    *,
+    player_resolver_fn: PlayerResolverFn | None,
+) -> str | None:
+    if getattr(decision, "intent", None) != "player_biography":
+        return None
+    player_name = getattr(decision, "player_name", None)
+    if not player_name:
+        return None
+    if player_resolver_fn is None:
+        from baseball_rag.corpus.player_bios import resolve_player_by_name
+        from baseball_rag.db.duckdb_schema import get_duckdb
+
+        resolution = resolve_player_by_name(player_name, get_duckdb())
+    else:
+        resolution = player_resolver_fn(player_name)
+    return getattr(resolution, "player_id", None)
+
+
+def _strategy_skip_reason(metadata: Any, category: str, player_id: str | None) -> str:
+    if category not in metadata.categories:
+        return f"strategy does not apply to {category!r}"
+    if metadata.requires_player_id and not player_id:
+        return "strategy requires a resolved player_id"
+    return "strategy not applicable"
+
+
 def _row_count(answer: StructuredAnswer) -> int:
     return sum(len(source.rows) for source in answer.sources)
 
@@ -312,10 +539,23 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="run evals once for each retrieval strategy and print a comparison table",
     )
+    parser.add_argument(
+        "--retrieval-only",
+        action="store_true",
+        help="benchmark retrieval strategies using retrieved chunks only; no answer generation",
+    )
     args = parser.parse_args(argv)
 
     cases = load_cases(args.questions)
     if args.all_strategies:
+        if args.retrieval_only:
+            strategy_result = StrategyRunResult(run_retrieval_strategy_cases(cases))
+            print(format_strategy_summary(strategy_result))
+            for strategy, result in strategy_result.by_strategy.items():
+                for failed in result.failed:
+                    print(f"- {strategy}/{failed.case_id}: " + "; ".join(failed.failures))
+            return 0 if strategy_result.ok else 1
+
         strategy_result = StrategyRunResult(
             run_strategy_cases(cases, include_live=args.include_live)
         )
@@ -327,6 +567,15 @@ def main(argv: list[str] | None = None) -> int:
 
     answer_fn: AnswerFn | None = None
     if args.strategy:
+        if args.retrieval_only:
+            strategy_result = StrategyRunResult(
+                run_retrieval_strategy_cases(cases, strategies=[args.strategy])
+            )
+            print(format_strategy_summary(strategy_result))
+            for failed in strategy_result.by_strategy[args.strategy].failed:
+                print(f"- {args.strategy}/{failed.case_id}: " + "; ".join(failed.failures))
+            return 0 if strategy_result.ok else 1
+
         from baseball_rag.service import answer as service_answer
 
         def answer_with_strategy(question: str) -> StructuredAnswer:
