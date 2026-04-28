@@ -1,5 +1,6 @@
 """Build a ChromaDB vector index from corpus documents."""
 
+import argparse
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -170,3 +171,21 @@ def _write_corpus_manifest(persist_dir: Path, manifest: dict) -> None:
     persist_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = persist_dir / "corpus_manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Build the local Chroma corpus index."""
+    parser = argparse.ArgumentParser(description=main.__doc__)
+    parser.add_argument("--persist-dir", type=Path, default=Path("data"))
+    parser.add_argument(
+        "--static-only",
+        action="store_true",
+        help="Index only checked-in Markdown corpus docs, not generated player bios.",
+    )
+    args = parser.parse_args(argv)
+    build_index(args.persist_dir, include_players=not args.static_only)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

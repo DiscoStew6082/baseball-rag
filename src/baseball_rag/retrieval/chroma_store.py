@@ -127,7 +127,7 @@ def _retrieve_impl(
 
     # Reject low-scoring retrievals — scores ~0.49 in high-dimensional space are
     # essentially random; fall back to LLM without retrieved context instead.
-    if chunks and chunks[0].score < RELEVANCE_THRESHOLD:
+    if chunks and where is None and chunks[0].score < RELEVANCE_THRESHOLD:
         return []
 
     return chunks
