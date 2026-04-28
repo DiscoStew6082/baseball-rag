@@ -142,6 +142,13 @@ Build the larger experimental index with generated player bios from DuckDB:
 uv run python -m baseball_rag.corpus
 ```
 
+Inspect the corpus/index state. This is safe before ingest, after ingest, or
+after a partial failed build:
+
+```bash
+uv run python -m baseball_rag.corpus diagnostics --persist-dir data
+```
+
 ## Evaluation
 
 The golden eval set lives in [evals/questions.yaml](evals/questions.yaml). It covers:
@@ -158,6 +165,12 @@ Current automated tests:
 
 ```bash
 uv run pytest -q
+```
+
+Retrieval-only strategy comparison for Chroma-backed eval cases:
+
+```bash
+uv run python -m evals.questions --all-strategies --retrieval-only
 ```
 
 The eval file is intentionally human-readable so it can drive a later test runner, CI report, or model-routing regression harness.

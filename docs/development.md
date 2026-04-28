@@ -45,11 +45,39 @@ Build the larger experimental index with generated player bios from DuckDB:
 uv run python -m baseball_rag.corpus
 ```
 
+For a full local rebuild from scratch:
+
+```bash
+uv run python -m baseball_rag.db.download
+uv run python -m baseball_rag.corpus
+uv run python -m baseball_rag.corpus diagnostics --persist-dir data
+```
+
+The diagnostics command reports the resolved `persist_dir`, whether the
+`baseball_corpus` collection exists, indexed document count, category/doc-kind
+counts, generated corpus manifest status/counts, and embedding environment/model
+hints. It is intentionally tolerant of missing or partial indexes, so it is safe
+to run while debugging an ingest failure:
+
+```bash
+uv run python -m baseball_rag.corpus diagnostics --persist-dir data
+```
+
+For the retrieval-only benchmark slice, run Chroma-backed eval cases once per
+retrieval strategy:
+
+```bash
+uv run python -m evals.questions --all-strategies --retrieval-only
+```
+
 ### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LM_STUDIO_URL` | `http://localhost:1234/v1/chat/completions` | LLM endpoint for generation |
+| `LMSTUDIO_BASE_URL` | `http://localhost:1234/v1` | Embedding endpoint base URL |
+| `LMSTUDIO_EMBEDDING_MODEL` | `text-embedding-kalm-embedding-gemma3-12b-2511-i1` | Embedding model used for Chroma ingest/retrieval |
+| `CHROMA_PERSIST_DIR` | `data/` | Optional override for retrieval and diagnostics persist directory |
 
 ## Running Locally
 

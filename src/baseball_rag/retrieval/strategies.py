@@ -11,12 +11,36 @@ from baseball_rag.retrieval.chroma_store import RetrievedChunk, retrieve
 RetrieveFn = Callable[..., list[RetrievedChunk]]
 
 
+@dataclass(frozen=True)
+class StrategyMetadata:
+    """Static reporting and applicability metadata for a retrieval strategy."""
+
+    name: str
+    description: str
+    categories: frozenset[str]
+    requires_player_id: bool = False
+
+
 class RetrievalStrategy(Protocol):
     """A benchmarkable retrieval tactic."""
 
     @property
     def name(self) -> str:
         """Stable strategy name for reporting."""
+        ...
+
+    @property
+    def metadata(self) -> StrategyMetadata:
+        """Static strategy metadata used by eval reporting."""
+        ...
+
+    def is_applicable(
+        self,
+        *,
+        category: str,
+        player_id: str | None = None,
+    ) -> bool:
+        """Return whether this strategy should be attempted for the routed case."""
         ...
 
     def retrieve(
@@ -37,6 +61,22 @@ class SemanticChromaStrategy:
 
     retrieve_fn: RetrieveFn = retrieve
     name: str = "semantic_chroma"
+
+    @property
+    def metadata(self) -> StrategyMetadata:
+        return StrategyMetadata(
+            name=self.name,
+            description="Unfiltered semantic Chroma retrieval.",
+            categories=frozenset({"player_biography", "general_explanation"}),
+        )
+
+    def is_applicable(
+        self,
+        *,
+        category: str,
+        player_id: str | None = None,
+    ) -> bool:
+        return _is_applicable(self.metadata, category=category, player_id=player_id)
 
     def retrieve(
         self,
@@ -63,6 +103,23 @@ class ExactPlayerIdStrategy:
 
     retrieve_fn: RetrieveFn = retrieve
     name: str = "exact_player_id"
+
+    @property
+    def metadata(self) -> StrategyMetadata:
+        return StrategyMetadata(
+            name=self.name,
+            description="Chroma retrieval filtered to a resolved player_id.",
+            categories=frozenset({"player_biography"}),
+            requires_player_id=True,
+        )
+
+    def is_applicable(
+        self,
+        *,
+        category: str,
+        player_id: str | None = None,
+    ) -> bool:
+        return _is_applicable(self.metadata, category=category, player_id=player_id)
 
     def retrieve(
         self,
@@ -91,6 +148,22 @@ class HybridPlayerBioStrategy:
 
     retrieve_fn: RetrieveFn = retrieve
     name: str = "hybrid_player_bio"
+
+    @property
+    def metadata(self) -> StrategyMetadata:
+        return StrategyMetadata(
+            name=self.name,
+            description="Exact player_id lookup with semantic biography fallback.",
+            categories=frozenset({"player_biography"}),
+        )
+
+    def is_applicable(
+        self,
+        *,
+        category: str,
+        player_id: str | None = None,
+    ) -> bool:
+        return _is_applicable(self.metadata, category=category, player_id=player_id)
 
     def retrieve(
         self,
@@ -124,6 +197,11 @@ def available_strategy_names() -> list[str]:
     return ["semantic_chroma", "exact_player_id", "hybrid_player_bio"]
 
 
+def available_strategy_metadata() -> list[StrategyMetadata]:
+    """Return metadata for all built-in strategies in display order."""
+    return [get_strategy(name).metadata for name in available_strategy_names()]
+
+
 def get_strategy(name: str, *, retrieve_fn: RetrieveFn = retrieve) -> RetrievalStrategy:
     """Build a retrieval strategy by name."""
     if name == "semantic_chroma":
@@ -134,6 +212,19 @@ def get_strategy(name: str, *, retrieve_fn: RetrieveFn = retrieve) -> RetrievalS
         return HybridPlayerBioStrategy(retrieve_fn=retrieve_fn)
     choices = ", ".join(available_strategy_names())
     raise ValueError(f"unknown retrieval strategy {name!r}; choose one of: {choices}")
+
+
+def _is_applicable(
+    metadata: StrategyMetadata,
+    *,
+    category: str,
+    player_id: str | None,
+) -> bool:
+    if category not in metadata.categories:
+        return False
+    if metadata.requires_player_id and not player_id:
+        return False
+    return True
 
 
 def _call_retrieve(

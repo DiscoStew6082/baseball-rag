@@ -1,19 +1,23 @@
 """Tests for the golden eval question runner."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 
 from baseball_rag.provenance import SourceRecord, StructuredAnswer
+from baseball_rag.retrieval.chroma_store import RetrievedChunk
 from evals.questions import (
     StrategyRunResult,
     format_strategy_summary,
     load_cases,
     run_cases,
+    run_retrieval_strategy_cases,
     run_strategy_cases,
     selected_cases,
     selected_strategy_cases,
     validate_case,
+    validate_retrieved_chunks,
 )
 
 
@@ -119,6 +123,39 @@ def test_selected_strategy_cases_filters_to_retrieval_relevant_cases():
     assert selected_strategy_cases([stat_case, bio_case, unsupported_case]) == [bio_case]
 
 
+def test_retrieval_category_comes_from_yaml_or_intent():
+    case = load_cases()[0].__class__(
+        id="bio",
+        question="who was Babe Ruth",
+        spec={
+            "id": "bio",
+            "question": "who was Babe Ruth",
+            "intent": "player_biography",
+            "retrieval_category": "player_biography",
+            "required_sources": ["chroma"],
+        },
+    )
+
+    assert case.retrieval_category == "player_biography"
+
+
+def test_retrieval_player_name_comes_from_yaml():
+    case = load_cases()[0].__class__(
+        id="bio",
+        question="who was Babe Ruth",
+        spec={
+            "id": "bio",
+            "question": "who was Babe Ruth",
+            "intent": "player_biography",
+            "retrieval_category": "player_biography",
+            "player_name": "Babe Ruth",
+            "required_sources": ["chroma"],
+        },
+    )
+
+    assert case.player_name == "Babe Ruth"
+
+
 def test_validate_case_checks_core_expectations():
     case = load_cases()[0]
 
@@ -139,6 +176,36 @@ def test_validate_case_reports_mismatches():
     assert "answer missing substring 'Davis'" in failures
     assert "sources missing required type 'duckdb'" in failures
     assert "row count: expected >= 1, got 0" in failures
+
+
+def test_validate_retrieved_chunks_checks_yaml_expectations():
+    case = load_cases()[0].__class__(
+        id="bio",
+        question="who was Babe Ruth",
+        spec={
+            "id": "bio",
+            "question": "who was Babe Ruth",
+            "intent": "player_biography",
+            "required_sources": ["chroma"],
+            "expected_answer_contains": ["Babe Ruth"],
+            "expected_retrieved_title_contains": ["Babe Ruth"],
+            "expected_player_id": "ruthba01",
+            "expected_doc_kind": "generated_player_profile",
+        },
+    )
+    chunks = [
+        RetrievedChunk(
+            text="Babe Ruth profile",
+            source="ruthba01.md",
+            title="Babe Ruth",
+            score=0.99,
+            player_id="ruthba01",
+            doc_kind="generated_player_profile",
+        )
+    ]
+
+    assert validate_retrieved_chunks(case, chunks) == []
+    assert "retrieval returned no chunks" in validate_retrieved_chunks(case, [])
 
 
 def test_run_cases_uses_mocked_answer_for_selected_cases_only():
@@ -213,6 +280,98 @@ def test_run_strategy_cases_runs_each_strategy_with_answer_factory():
     ]
 
 
+def test_run_retrieval_strategy_cases_uses_route_resolve_and_raw_chunks():
+    base_case = load_cases()[0]
+    case = base_case.__class__(
+        id="bio",
+        question="who was Babe Ruth",
+        spec={
+            "id": "bio",
+            "question": "who was Babe Ruth",
+            "intent": "player_biography",
+            "retrieval_category": "player_biography",
+            "player_name": "Babe Ruth",
+            "required_sources": ["chroma"],
+            "expected_answer_contains": ["Babe Ruth"],
+            "expected_player_id": "ruthba01",
+        },
+    )
+    calls: list[dict] = []
+
+    def route_fn(question: str):
+        raise AssertionError(f"route should not be called for metadata-complete case: {question}")
+
+    def resolve_player(name: str):
+        assert name == "Babe Ruth"
+        return SimpleNamespace(player_id="ruthba01")
+
+    def retrieve_fn(query, *, top_k=3, persist_dir=None, where=None):
+        calls.append({"query": query, "top_k": top_k, "where": where})
+        return [
+            RetrievedChunk(
+                text="Babe Ruth profile",
+                source="ruthba01.md",
+                title="Babe Ruth",
+                score=0.98,
+                player_id="ruthba01",
+            )
+        ]
+
+    results = run_retrieval_strategy_cases(
+        [case],
+        strategies=["exact_player_id"],
+        route_fn=route_fn,
+        player_resolver_fn=resolve_player,
+        retrieve_fn=retrieve_fn,
+    )
+
+    assert results["exact_player_id"].ok
+    assert len(results["exact_player_id"].passed) == 1
+    assert calls == [{"query": "Babe Ruth", "top_k": 1, "where": {"player_id": "ruthba01"}}]
+
+
+def test_run_retrieval_strategy_cases_skips_non_applicable_strategy():
+    base_case = load_cases()[0]
+    case = base_case.__class__(
+        id="broad",
+        question="what is OPS",
+        spec={
+            "id": "broad",
+            "question": "what is OPS",
+            "intent": "general_explanation",
+            "retrieval_category": "general_explanation",
+            "required_sources": ["chroma"],
+        },
+    )
+
+    def route_fn(question: str):
+        return SimpleNamespace(
+            intent="general_explanation",
+            player_name=None,
+            raw_question=question,
+        )
+
+    results = run_retrieval_strategy_cases(
+        [case],
+        strategies=["exact_player_id", "semantic_chroma"],
+        route_fn=route_fn,
+        retrieve_fn=lambda *_args, **_kwargs: [
+            RetrievedChunk(
+                text="OPS is on-base plus slugging",
+                source="ops.md",
+                title="OPS",
+                score=1,
+            )
+        ],
+    )
+
+    assert len(results["exact_player_id"].skipped) == 1
+    assert results["exact_player_id"].skipped[0].reason == (
+        "strategy does not apply to 'general_explanation'"
+    )
+    assert len(results["semantic_chroma"].passed) == 1
+
+
 def test_format_strategy_summary_renders_table():
     result = StrategyRunResult()
     result.by_strategy["exact_player_id"] = run_cases(
@@ -232,3 +391,4 @@ def test_format_strategy_summary_renders_table():
     assert "passed" in summary
     assert "failed" in summary
     assert "skipped" in summary
+    assert "chunks" in summary

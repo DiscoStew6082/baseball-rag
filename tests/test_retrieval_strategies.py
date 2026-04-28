@@ -7,6 +7,7 @@ from baseball_rag.retrieval.strategies import (
     ExactPlayerIdStrategy,
     HybridPlayerBioStrategy,
     SemanticChromaStrategy,
+    available_strategy_metadata,
     available_strategy_names,
     get_strategy,
 )
@@ -22,6 +23,27 @@ def test_available_strategy_names_includes_initial_benchmarks():
         "exact_player_id",
         "hybrid_player_bio",
     ]
+
+
+def test_strategy_metadata_declares_applicability_categories():
+    metadata = {item.name: item for item in available_strategy_metadata()}
+
+    assert metadata["semantic_chroma"].categories == frozenset(
+        {"player_biography", "general_explanation"}
+    )
+    assert metadata["exact_player_id"].categories == frozenset({"player_biography"})
+    assert metadata["exact_player_id"].requires_player_id is True
+    assert metadata["hybrid_player_bio"].categories == frozenset({"player_biography"})
+
+
+def test_strategy_applicability_uses_category_and_player_id_requirements():
+    assert SemanticChromaStrategy().is_applicable(category="general_explanation")
+    assert ExactPlayerIdStrategy().is_applicable(
+        category="player_biography",
+        player_id="ruthba01",
+    )
+    assert not ExactPlayerIdStrategy().is_applicable(category="player_biography")
+    assert not HybridPlayerBioStrategy().is_applicable(category="general_explanation")
 
 
 def test_semantic_chroma_uses_unfiltered_vector_search():
