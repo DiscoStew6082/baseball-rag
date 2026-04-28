@@ -29,6 +29,10 @@ class FreeformResult:
     row_count: int  # len(rows)
     truncated: bool  # True if results exceeded MAX_ROWS
     params: list[object] = field(default_factory=list)
+    source_label: str = "LLM-backed typed freeform query"
+    source_detail: str = (
+        "LLM extracted a typed intent; Python assembled constrained SQL deterministically."
+    )
 
 
 def query(
@@ -56,17 +60,30 @@ def query(
     # 2. Prefer deterministic templates for common baseball-history questions.
     #    Unmatched questions fall back to LLM-backed typed intent extraction.
     assembled = _detect_template(enriched_question)
-    if assembled is None:
+    if assembled is not None:
+        source_label = "Deterministic template query"
+        source_detail = _template_source_detail(enriched_question)
+    else:
         schema = _get_schema_cached(conn)
         spec = _generate_query_spec(enriched_question, schema)
         assembled = _assemble_sql(spec)
+        source_label = "LLM-backed typed freeform query"
+        source_detail = (
+            "LLM extracted a typed intent; Python assembled constrained SQL deterministically."
+        )
     sql = assembled.sql.strip().rstrip(";")
 
     # Validate table/column references before executing
     _validate_sql(sql, conn)
 
     # 4. Execute with timeout + row limit enforcement
-    result = _execute_safe(sql, conn, assembled.params)
+    result = _execute_safe(
+        sql,
+        conn,
+        assembled.params,
+        source_label=source_label,
+        source_detail=source_detail,
+    )
 
     return result
 
@@ -238,6 +255,27 @@ def _detect_template(question: str) -> AssembledSQL | None:
         return _qualified_season_era_sql(year, _extract_min_ipouts(q, default=300))
 
     return None
+
+
+def _template_source_detail(question: str) -> str:
+    """Return portfolio-facing provenance detail for matched templates."""
+    q = _normalize_question(question)
+    if "triple crown" in q:
+        return (
+            "Matched local Triple Crown template: batting HR, RBI, and AVG "
+            "league leaders by season."
+        )
+    if re.search(r"\b30\s*30\b", q) or "30 30 club" in q or "thirty thirty" in q:
+        return "Matched local 30-30 club template: player seasons with at least 30 HR and 30 SB."
+    if "era" in q:
+        if "career" in q:
+            return "Matched local career ERA leaders template with an innings qualification guard."
+        return "Matched local qualified season ERA leader template with an innings guard."
+    if "home run" in q or "homer" in q or re.search(r"\bhrs?\b", q):
+        return "Matched local 500 HR club template: career batting home run totals."
+    if "wins" in q or re.search(r"\bw\b", q):
+        return "Matched local career pitching wins leaders template: career pitching W totals."
+    return "Matched local deterministic freeform SQL template."
 
 
 def _has_era_qualification_guard(q: str) -> bool:
@@ -700,7 +738,14 @@ def _validate_sql(sql: str, conn: duckdb.DuckDBPyConnection) -> None:
 
 
 def _execute_safe(
-    sql: str, conn: duckdb.DuckDBPyConnection, params: list[object] | None = None
+    sql: str,
+    conn: duckdb.DuckDBPyConnection,
+    params: list[object] | None = None,
+    *,
+    source_label: str = "LLM-backed typed freeform query",
+    source_detail: str = (
+        "LLM extracted a typed intent; Python assembled constrained SQL deterministically."
+    ),
 ) -> FreeformResult:
     """Execute with timeout and row limit guardrails."""
     # Set DuckDB query timeout (best effort -- not all DuckDB versions support this)
@@ -726,6 +771,8 @@ def _execute_safe(
             row_count=len(rows),
             truncated=truncated,
             params=safe_params,
+            source_label=source_label,
+            source_detail=source_detail,
         )
     except Exception as e:
         raise RuntimeError(f"Query failed: {e}\nSQL: {sql}") from e

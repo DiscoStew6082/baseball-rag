@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -132,6 +133,18 @@ class RetrievalCaseResult(EvalCaseResult):
     player_name: str | None = None
     player_id: str | None = None
     retrieved_count: int = 0
+
+
+@dataclass(frozen=True)
+class EvalReport:
+    """Markdown report content for a CLI eval run."""
+
+    command: str
+    cases: list[EvalCase]
+    include_live: bool
+    result: EvalRunResult | None = None
+    strategy_results: dict[str, EvalRunResult] | None = None
+    mode: str = "answer"
 
 
 def load_cases(path: Path = DEFAULT_QUESTIONS_PATH) -> list[EvalCase]:
@@ -349,6 +362,94 @@ def format_strategy_summary(result: StrategyRunResult | dict[str, EvalRunResult]
     return "\n".join(lines)
 
 
+def format_eval_report(report: EvalReport) -> str:
+    """Render a deterministic Markdown report for portfolio/demo use."""
+    if report.strategy_results is None:
+        if report.result is None:
+            raise ValueError("EvalReport requires result or strategy_results")
+        passed = len(report.result.passed)
+        failed = len(report.result.failed)
+        skipped = len(report.result.skipped)
+        attempted = report.result.attempted
+    else:
+        passed = sum(len(result.passed) for result in report.strategy_results.values())
+        failed = sum(len(result.failed) for result in report.strategy_results.values())
+        skipped = sum(len(result.skipped) for result in report.strategy_results.values())
+        attempted = passed + failed
+
+    lines = [
+        "# Baseball RAG Eval Report",
+        "",
+        f"- Command: `{report.command}`",
+        f"- Mode: {report.mode}",
+        f"- Cases loaded: {len(report.cases)}",
+        f"- Attempted: {attempted}",
+        f"- Passed: {passed}",
+        f"- Failed: {failed}",
+        f"- Skipped: {skipped}",
+        "",
+        "## Service Requirements",
+        "",
+    ]
+    if report.include_live:
+        lines.append(
+            "- Live evals were included; `--include-live` may require Chroma, corpus, "
+            "and LLM services."
+        )
+    else:
+        non_default_skipped = sum(
+            1 for case in report.cases if not case.should_run(include_live=False)
+        )
+        live_service_cases = sum(
+            1
+            for case in report.cases
+            if not case.should_run(include_live=False) and case.requires_live_services()
+        )
+        lines.append(
+            "- Deterministic/CI-safe mode was used; non-default cases were skipped. "
+            f"{non_default_skipped} case(s) are available behind `--include-live`; "
+            f"{live_service_cases} skipped case(s) may require Chroma, corpus, "
+            "and LLM services."
+        )
+
+    coverage_lines = _coverage_examples(report.cases)
+    if coverage_lines:
+        lines.extend(["", "## Suite Coverage", ""])
+        lines.extend(coverage_lines)
+
+    failed_results: list[tuple[str | None, EvalCaseResult]]
+    if report.strategy_results is not None:
+        lines.extend(["", "## Strategy Summary", "", "```text"])
+        lines.append(format_strategy_summary(report.strategy_results))
+        lines.append("```")
+        failed_results = [
+            (strategy, case_result)
+            for strategy, result in report.strategy_results.items()
+            for case_result in result.failed
+        ]
+    else:
+        result = report.result
+        if result is None:
+            raise ValueError("EvalReport requires result or strategy_results")
+        failed_results = [(None, case_result) for case_result in result.failed]
+
+    lines.extend(["", "## Failed Cases", ""])
+    if not failed_results:
+        lines.append("- None")
+    else:
+        for strategy, case_result in failed_results:
+            prefix = f"{strategy}/" if strategy is not None else ""
+            lines.append(f"- `{prefix}{case_result.case_id}`: {'; '.join(case_result.failures)}")
+
+    return "\n".join(lines) + "\n"
+
+
+def write_eval_report(path: Path, report: EvalReport) -> None:
+    """Write an eval report, creating parent directories as needed."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(format_eval_report(report), encoding="utf-8")
+
+
 def validate_case(case: EvalCase, answer: StructuredAnswer) -> list[str]:
     """Validate supported golden expectations against a structured answer."""
     failures: list[str] = []
@@ -554,6 +655,32 @@ def _normalized_text(value: str) -> str:
     return without_accents.casefold()
 
 
+def _coverage_examples(cases: list[EvalCase]) -> list[str]:
+    examples: list[str] = []
+    seen: set[str] = set()
+    labels = {
+        "stat_query": "stat query",
+        "freeform_query": "freeform SQL query",
+        "player_biography": "player biography retrieval",
+        "general_explanation": "baseball explanation retrieval",
+    }
+    for case in cases:
+        key = case.retrieval_category or case.intent
+        if key is None and case.spec.get("expected_unsupported", False):
+            key = "unsupported"
+        if key is None or key in seen:
+            continue
+        label = labels.get(key, "unsupported/guardrail")
+        examples.append(f"- {label}: `{case.id}` - {case.question}")
+        seen.add(key)
+    return examples
+
+
+def _command_for_report(argv: list[str] | None) -> str:
+    args = sys.argv[1:] if argv is None else argv
+    return " ".join(["python", "-m", "evals.questions", *args])
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run evals from the command line."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -579,9 +706,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="benchmark retrieval strategies using retrieved chunks only; no answer generation",
     )
+    parser.add_argument(
+        "--report",
+        type=Path,
+        default=None,
+        help="write a Markdown eval report to PATH",
+    )
     args = parser.parse_args(argv)
 
     cases = load_cases(args.questions)
+    command = _command_for_report(argv)
     if args.all_strategies:
         if args.retrieval_only:
             strategy_result = StrategyRunResult(run_retrieval_strategy_cases(cases))
@@ -589,6 +723,17 @@ def main(argv: list[str] | None = None) -> int:
             for strategy, result in strategy_result.by_strategy.items():
                 for failed in result.failed:
                     print(f"- {strategy}/{failed.case_id}: " + "; ".join(failed.failures))
+            if args.report:
+                write_eval_report(
+                    args.report,
+                    EvalReport(
+                        command=command,
+                        cases=cases,
+                        include_live=args.include_live,
+                        strategy_results=strategy_result.by_strategy,
+                        mode="retrieval-only all-strategies",
+                    ),
+                )
             return 0 if strategy_result.ok else 1
 
         strategy_result = StrategyRunResult(
@@ -598,6 +743,17 @@ def main(argv: list[str] | None = None) -> int:
         for strategy, result in strategy_result.by_strategy.items():
             for failed in result.failed:
                 print(f"- {strategy}/{failed.case_id}: " + "; ".join(failed.failures))
+        if args.report:
+            write_eval_report(
+                args.report,
+                EvalReport(
+                    command=command,
+                    cases=cases,
+                    include_live=args.include_live,
+                    strategy_results=strategy_result.by_strategy,
+                    mode="answer all-strategies",
+                ),
+            )
         return 0 if strategy_result.ok else 1
 
     answer_fn: AnswerFn | None = None
@@ -609,6 +765,17 @@ def main(argv: list[str] | None = None) -> int:
             print(format_strategy_summary(strategy_result))
             for failed in strategy_result.by_strategy[args.strategy].failed:
                 print(f"- {args.strategy}/{failed.case_id}: " + "; ".join(failed.failures))
+            if args.report:
+                write_eval_report(
+                    args.report,
+                    EvalReport(
+                        command=command,
+                        cases=cases,
+                        include_live=args.include_live,
+                        strategy_results=strategy_result.by_strategy,
+                        mode=f"retrieval-only strategy {args.strategy}",
+                    ),
+                )
             return 0 if strategy_result.ok else 1
 
         from baseball_rag.service import answer as service_answer
@@ -625,6 +792,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     for failed in result.failed:
         print(f"- {failed.case_id}: " + "; ".join(failed.failures))
+    if args.report:
+        write_eval_report(
+            args.report,
+            EvalReport(
+                command=command,
+                cases=cases,
+                include_live=args.include_live,
+                result=result,
+                mode="answer",
+            ),
+        )
     return 0 if result.ok else 1
 
 
